@@ -1,0 +1,7 @@
+.bootstrap/
+.venv/
+.local/
+.cache/
+output/
+__pycache__/
+requirements-mineru-resolved.txt
