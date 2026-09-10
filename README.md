@@ -104,8 +104,36 @@ multi-page JSON is rejected. PDF/image files are not OCR text inputs.
 At least two files are required; at least three are needed to distinguish
 method rankings. All outputs without word/number tokens raise `ValueError`;
 exclude such pages explicitly rather than treating them as perfect agreement.
-The score measures consensus, not accuracy. The default pair score weights
-token overlap and sequence similarity equally; `overlap_weight` changes this.
+The score measures consensus, not accuracy. Version 3 uses token-count overlap
+alone by default (`overlap_weight=1.0`), so reading order does not lower the
+primary score. Omissions, extra repetitions and numeric changes still count.
+For diagnostics, `score_page_details(paths)` returns `score`, `model_scores`
+(in input order), and `pairs` with separate token, sequence and numeric agreement.
+Pair similarities are 0–1; the page and method scores are 0–100. Sequence and
+numeric diagnostics have no additional weight in the default primary score.
+Explicitly setting `overlap_weight=0.5` opts into the old 50/50 blend.
+
+Version 3.1 preserves accounting parentheses as written: `(100.00)` differs
+from `100.00` without assuming every parenthesized number is negative. Numeric
+agreement now counts occurrences, so missing a repeated amount lowers it;
+`unmatched_left_numeric_counts` and `unmatched_right_numeric_counts` identify
+the missing or extra occurrences. Inline HTML emphasis does not split words,
+while block elements and table cells remain separated.
+
+The default `score_page()` and `score_models()` use a counter-only path, avoiding
+sequence alignment and full difference generation. Request
+`score_page_details()` when those diagnostics are needed. Explicit sequence
+weighting still requires alignment.
+
+Normalization retains the version 2 fixes: signed numbers, decimal/date separators,
+percentages and leading zeroes in scoring. Plain `.txt` files retain literal
+angle-bracket text; Markdown and HTML formatting are decoded once before
+idempotent plain-text normalization. Unknown tags such as `<REDACTED>` are
+preserved. A word split by a line-break hyphen is joined only when another
+output for that comparison contains the joined word. Soft hyphens are removed.
+These rules reduce formatting penalties but do not establish which OCR is right.
+The batch JSON pair details also include `numeric_agreement` (0–1, or `null`
+when neither output has numbers), alongside token and sequence scores.
 
 ### Evaluate saved repository outputs
 
@@ -121,9 +149,18 @@ Results are saved in `output/cross_model/`: `report.md`, `results.json`,
 `normalized_pages.json`. The JSON includes overall and per-document rankings,
 pairwise scores, and provenance. Differences include text passages and numeric
 strings, preserving leading zeroes in the numeric comparison.
+Normalized page exports include `input_format: "plain"` so they can be supplied
+back through `--input` without parsing literal markup again. Repository loading
+requires exactly one matching output file/run per method and document; missing
+or ambiguous matches raise an error instead of choosing the first result.
+For multiple runs, supply exact page paths to `score_page()` or prepare a custom
+`--input` JSON from the chosen run. Selected raw OCR artifact hashes are saved
+in the provenance metadata.
 
-The ranking measures **consensus, not accuracy**: each pair receives 50% token
-overlap (including token counts) and 50% symmetric token sequence similarity.
+The ranking measures **consensus, not accuracy**: each pair uses token-count
+overlap, computed as twice the shared token occurrences divided by the total
+token occurrences in both outputs. Sequence and numeric agreement are reported
+separately. Identical token counts can score 100 even if word associations differ.
 Each method's score averages its agreement with the other methods on each page,
 then averages pages within each document and gives each document equal weight.
 Formatting is removed before comparison; layout and structure are not scored.
@@ -131,9 +168,11 @@ Shared OCR errors can inflate consensus. The saved openai-6 and fable-5-1
 artifacts describe Tesseract with visual review, so those folder names do not
 verify inference by the named models.
 
-Options include `--overlap-weight 0.7`, `--weighting page`,
+Options include `--weighting page`,
 `--documents csa board trade`, `--models mistral openai-6 mineru`, and
 `--output output/custom_evaluation`.
+Use `--overlap-weight 0.7` only to explicitly opt into a 70/30 overlap/sequence
+blend; the default 1.0 keeps reading order out of the ranking.
 
 To evaluate other saved text, provide `--input path/to/pages.json` using this
 schema (at least three methods are required):
@@ -152,6 +191,10 @@ Every document must contain the same methods with matching page counts. Align
 the same physical pages in the same order before evaluation; matching counts
 alone cannot verify alignment. All-empty pages are excluded. A pair of empty
 outputs receives zero agreement when another method contains text on that page.
+
+Custom JSON records may specify `"input_format": "plain"`, `"markdown"`
+(default), or `"html"`. Use `plain` for text already extracted from formatting,
+including previously normalized text, so literal markup is not parsed again.
 
 Run the evaluation tests with:
 

@@ -21,34 +21,100 @@ DOCS = {'csa': '1000759706 SSGA - SCB - CSA - EXECUTED - ANON (CLEAN)',
         'board': 'board_resolution', 'trade': 'Trade-1118348-260625.001369.01.01.tif0'}
 OUT = ROOT / 'output' / 'performance'
 
+# Parse only known formatting tags; preserve OCR placeholders such as <REDACTED>.
+FORMATTING_TAGS = set("p div span br hr table thead tbody tfoot tr td th caption h1 h2 h3 h4 h5 h6 b strong i em u s del sup sub ul ol li pre code blockquote a img html body section article".split())
+INLINE_TAGS = set('span b strong i em u s del sup sub code a'.split())
+ALGORITHM_VERSION = '3.1'
+
 class Plain(HTMLParser):
     def __init__(self):
-        super().__init__(); self.parts=[]
-    def handle_data(self, data): self.parts.append(data)
-    def handle_starttag(self, tag, attrs): self.parts.append(' ')
-    def handle_endtag(self, tag): self.parts.append(' ')
+        super().__init__(); self.parts = []
+    def handle_data(self, data):
+        self.parts.append(data)
+    def handle_starttag(self, tag, attrs):
+        self.parts.append('' if tag in INLINE_TAGS else ' ' if tag in FORMATTING_TAGS else self.get_starttag_text())
+    def handle_endtag(self, tag):
+        self.parts.append('' if tag in INLINE_TAGS else ' ' if tag in FORMATTING_TAGS else f'</{tag}>')
+
+
+def extract_text(text, input_format='markdown'):
+    """Decode a source format ONCE. Plain text is never parsed as markup."""
+    if input_format not in ('plain', 'markdown', 'html'):
+        raise ValueError(f'Unsupported input_format: {input_format}')
+    if input_format == 'plain':
+        return text
+    if input_format == 'markdown':
+        text = re.sub(r'!\[[^\]]*\]\([^)]*\)', ' ', text)
+        text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
+        text = re.sub(r'(?m)^\s{0,3}#{1,6}\s+', '', text)
+        text = re.sub(r'(?m)^\s*[-*+]\s+(?=\D)', '', text)
+        text = re.sub(r'(?m)^\s*\|?[ :|-]+\|[ :|-]*$', '', text)
+        text = text.replace('|', ' ').replace('**', '').replace('`', '')
+    parser = Plain(); parser.feed(text); parser.close()
+    return ''.join(parser.parts)
+
 
 def clean(text):
-    text = re.sub(r'!\[[^\]]*\]\([^)]*\)', ' ', text)
-    text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
-    text = re.sub(r'(?m)^\s{0,3}#{1,6}\s+', '', text)
-    text = re.sub(r'(?m)^\s*[-*+]\s+', '', text)
-    text = re.sub(r'(?m)^\s*\|?[ :|-]+\|[ :|-]*$', '', text)
-    text = text.replace('|', ' ').replace('**', '').replace('`', '')
-    parser = Plain(); parser.feed(text)
-    return re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', ''.join(parser.parts))).strip()
+    """Idempotent plain-text normalization; does not interpret HTML or Markdown."""
+    return re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', text).replace('\u00ad', '')).strip()
+
+
+def normalize_texts(texts, formats=None):
+    """Extract once, then repair line hyphens only with cross-output corroboration."""
+    formats = formats if formats is not None else ['markdown'] * len(texts)
+    if len(formats) != len(texts):
+        raise ValueError('One input format is required per text.')
+    extracted = [extract_text(t, f) for t, f in zip(texts, formats)]
+    vocabularies = [set(re.findall(r'[^\W\d_]+', t.casefold())) for t in extracted]
+    normalized = []
+    for index, text in enumerate(extracted):
+        peers = set().union(*(v for i, v in enumerate(vocabularies) if i != index))
+        def repair(match):
+            joined = match[1] + match[2]
+            return joined if joined.casefold() in peers else match[0]
+        text = re.sub(r'([^\W\d_]+)-[ \t]*\r?\n[ \t]*([^\W\d_]+)', repair, text)
+        normalized.append(clean(text))
+    return normalized
+
+
+# Keep signed numbers, internal decimal/date/ID punctuation, and percentages intact.
+SIGNED_NUMBER = r'[+\-−]?\d+(?:[.,:/-]\d+)*(?:[%‰])?'
+# Preserve accounting parentheses literally; do not infer that every (123) is negative.
+NUMBER = r'(?:\(\s*' + SIGNED_NUMBER + r'\s*\)|' + SIGNED_NUMBER + r')'
+TOKEN = re.compile(r'(?<!\w)' + NUMBER + r'(?!\w)|\w+')
 
 
 def tokens(text):
-    return re.findall(r"\w+", text.casefold())
+    return [re.sub(r'\s+', '', t) if t.startswith('(') else t
+            for t in TOKEN.findall(text.casefold().replace('−', '-'))]
 
 
 def numeric_strings(text):
-    # Preserve punctuation and leading zeroes; these are strings, not inferred fields.
-    return sorted(set(re.findall(r'(?<!\w)\d+(?:[.,:/-]\d+)*(?:%)?(?!\w)', text)))
+    return sorted(numeric_counts(text))
 
 
-def load():
+def numeric_counts(text):
+    return collections.Counter(re.sub(r'\s+', '', n) for n in
+                               re.findall(r'(?<!\w)' + NUMBER + r'(?!\w)', text.replace('−', '-')))
+
+
+def counter_overlap(left, right):
+    total = sum(left.values()) + sum(right.values())
+    return 2 * sum((left & right).values()) / total if total else 0.0
+
+
+def one_match(matches, description):
+    """Never silently choose one of multiple saved OCR runs."""
+    paths = sorted(matches)
+    if not paths:
+        raise FileNotFoundError(f'No matching OCR artifact: {description}')
+    if len(paths) != 1:
+        raise ValueError(f'Ambiguous OCR artifacts for {description}: ' + ', '.join(map(str, paths)) +
+                         '. Supply explicit page files or a custom --input JSON instead.')
+    return paths[0]
+
+
+def load(normalize=True):
     data={}; manifest=[]
     for doc,stem in DOCS.items():
         source=ROOT/'data'/(stem+'.pdf')
@@ -57,7 +123,7 @@ def load():
         for engine in ENGINES:
             base=ROOT/'output'/engine
             if engine in ['openai-6','fable-5-1']:
-                path=next(base.glob(stem+'*.json')); raw=json.loads(path.read_text())
+                path=one_match(base.glob(stem+'*.json'), f'{doc}/{engine}'); raw=json.loads(path.read_text())
                 if engine=='openai-6':
                     page_list=[p['markdown'] for p in raw['pages']]
                     provenance=raw['engine']; matching=raw['source_sha256']==source_hash
@@ -68,7 +134,8 @@ def load():
                     fields=None
                 paths=[path]
             else:
-                folder=next(base.glob(stem+'*')); path=next(folder.glob('*/source.json'))
+                folder=one_match((p for p in base.glob(stem+'*') if p.is_dir()), f'{doc}/{engine} folder')
+                path=one_match(folder.glob('*/source.json'), f'{doc}/{engine} run')
                 meta=json.loads(path.read_text()); paths=sorted(path.parent.glob('response-*.json'))
                 raw_responses=[json.loads(p.read_text()) for p in paths]
                 page_list=[];fields=None
@@ -87,10 +154,14 @@ def load():
                 matching=path.parent.name in [digest.hexdigest()[:16],legacy.hexdigest()[:16]]
                 if doc=='trade' and engine=='mistral':matching=None # TIFF submitted as separate PNG frames
                 provenance=meta
-            data[doc][engine]={'pages':[clean(page) for page in page_list]}
+            fmt = 'plain' if engine == 'fable-5-1' else 'markdown'
+            data[doc][engine] = {'pages': normalize_texts(page_list, [fmt] * len(page_list)) if normalize else page_list,
+                                 'input_format': 'plain' if normalize else fmt}
             manifest.append({'document':doc,'engine_label':engine,'metadata':provenance,
                              'source_pdf':str(source),'source_sha256':source_hash,'source_hash_verified':matching,
-                             'artifacts':[str(p) for p in paths], 'page_count':len(page_list)})
+                             'artifacts':[str(p) for p in paths],
+                             'artifact_sha256':{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},
+                             'page_count':len(page_list)})
     return data,manifest
 
 def compare_page(doc, index, a, b, left, right):
@@ -108,12 +179,14 @@ def compare_page(doc, index, a, b, left, right):
                             'left_offset': i, 'right_offset': k,
                             'left_context': ' '.join(x[max(0,i-5):min(len(x),j+5)]),
                             'right_context': ' '.join(y[max(0,k-5):min(len(y),l+5)])})
-    nx, ny = set(numeric_strings(left)), set(numeric_strings(right))
+    nx, ny = numeric_counts(left), numeric_counts(right)
     return {'document':doc, 'page':index, 'left':a, 'right':b,
             'left_tokens':len(x), 'right_tokens':len(y), 'shared_token_occurrences':overlap,
-            'token_overlap':2*overlap/denom if denom else 1,
-            'sequence_similarity':(forward.ratio()+reverse.ratio())/2,
+            'token_overlap':2*overlap/denom if denom else 0,
+            'sequence_similarity':(forward.ratio()+reverse.ratio())/2 if denom else 0,
+            'numeric_agreement':counter_overlap(nx, ny) if nx or ny else None,
             'only_left_numeric_strings':sorted(nx-ny), 'only_right_numeric_strings':sorted(ny-nx),
+            'unmatched_left_numeric_counts':dict(nx-ny), 'unmatched_right_numeric_counts':dict(ny-nx),
             'changes':changes}
 
 

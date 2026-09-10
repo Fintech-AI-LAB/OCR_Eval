@@ -5,12 +5,12 @@ import json
 import statistics
 
 from cross_model_eval import evaluate
-from evaluate_outputs import DOCS, load
+from evaluate_outputs import ALGORITHM_VERSION, DOCS, load
 from ocr_common import ROOT, write_json
 
 
 def main():
-    data, provenance = load()
+    data, provenance = load(normalize=False)
     output = ROOT / 'output' / 'five_model_comparison'
     insavlo_paths = {
         'csa': ROOT / 'output/insavlo' / (DOCS['csa'] + '.md'),
@@ -29,13 +29,14 @@ def main():
                            'artifacts': [str(path)], 'sha256': hashlib.sha256(raw).hexdigest(),
                            'source_hash_verified': None,
                            'metadata': 'Markdown only; model provenance and physical page boundaries unavailable.'})
-    result, pairs, volumes, normalized = evaluate(data, weighting='document')
+    result, pairs, volumes, normalized = evaluate(data, overlap_weight=1.0, weighting='document')
     # The evaluator uses one text unit per record: here each unit is a DOCUMENT.
     for row in pairs + volumes:
         row.pop('page', None)
         row['unit'] = 'whole_document'
     for row in result['pairwise_summary']:
         row['documents'] = row.pop('pages')
+        row['documents_with_numbers'] = row.pop('pages_with_numbers')
         for key in list(row):
             if key.startswith('mean_page_'):
                 row[key.replace('mean_page_', 'mean_document_')] = row.pop(key)
@@ -57,7 +58,7 @@ def main():
         writer.writerows(result['ranking'])
     lines = ['# Five-method text consensus comparison', '',
              'Three complete documents; each document has equal weight. Insavlo lacks consistent physical page boundaries, so this is a whole-document comparison, not a page-average comparison. All methods use the same document scope.', '',
-             'Pair agreement = 50% token-count overlap + 50% symmetric token sequence similarity. Each method is scored against its four peers, then averaged across documents. Formatting, case and punctuation are ignored for scoring; text order remains part of the score. No structure or layout score is used.', '',
+             f'Algorithm version {ALGORITHM_VERSION}: primary agreement is token-count overlap, independent of reading order. Each method is scored against its four peers, then averaged across documents. Formatting and case are ignored; signed numbers, decimal separators, accounting parentheses and percentages are retained. Sequence similarity and numeric agreement are separate diagnostics and do not contribute additional weight to the ranking. Numeric agreement counts repeated occurrences. Numeric tokens are included in token overlap. No structure or layout score is used. A reordered text can receive 100 even when word associations differ; this is a content-consensus measure.', '',
              '**Consensus is not accuracy.** Shared errors can increase scores. The openai-6 and fable-5-1 artifacts describe Tesseract with visual review; their folder labels do not verify the named models. Insavlo has no model provenance metadata. No OCR was rerun.', '',
              '| Rank | Method | Mean consensus / 100 | CSA | Board | Trade |',
              '|---:|---|---:|---:|---:|---:|']

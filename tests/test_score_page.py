@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.score_page import score_page, score_models
+from scripts.score_page import score_page, score_models, score_page_details
 
 
 class PageScoreTests(unittest.TestCase):
@@ -28,7 +28,7 @@ class PageScoreTests(unittest.TestCase):
         self.assertEqual(score_models(paths[::-1]), [0, 50, 50])
 
     def test_normalization_and_two_outputs(self):
-        self.assertEqual(score_page(self.files(['# Hello **world**', '<p>hello world</p>'])), 100)
+        self.assertEqual(score_page(self.files(['# Hello **world**', '<p>hello world</p>'], '.md')), 100)
 
     def test_supported_json_formats(self):
         values = [{'pages': [{'markdown': 'hello world'}]},
@@ -48,6 +48,19 @@ class PageScoreTests(unittest.TestCase):
         with self.assertRaises(ValueError): score_page(paths[:2])
         with self.assertRaises(ValueError): score_page([paths[2], paths[2]])
         with self.assertRaises(ValueError): score_page(paths, float('nan'))
+
+    def test_reading_order_does_not_change_primary_score(self):
+        paths = self.files(['alice bob carol david', 'carol david alice bob', 'bob alice david carol'])
+        details = score_page_details(paths)
+        self.assertEqual(details['score'], 100)
+        self.assertEqual(details['model_scores'], [100, 100, 100])
+        self.assertTrue(any(p['sequence_similarity'] < 1 for p in details['pairs']))
+        self.assertLess(score_page(paths, overlap_weight=0.5), 100)
+
+    def test_omissions_repetitions_and_numeric_errors_still_count(self):
+        for texts in [('alice bob', 'alice'), ('alice bob', 'alice alice bob'),
+                      ('total -100.00', 'total 100.00')]:
+            self.assertLess(score_page(self.files(texts)), 100)
 
 
 if __name__ == '__main__':

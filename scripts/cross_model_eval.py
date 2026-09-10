@@ -9,7 +9,7 @@ import math
 import statistics
 from pathlib import Path
 
-from evaluate_outputs import clean, compare_page, load
+from evaluate_outputs import ALGORITHM_VERSION, normalize_texts, tokens, compare_page, load
 from ocr_common import ROOT, write_json
 
 
@@ -50,14 +50,19 @@ def rank(scores):
     return result
 
 
-def evaluate(data, overlap_weight=0.5, weighting='document'):
+def evaluate(data, overlap_weight=1.0, weighting='document'):
     if not math.isfinite(overlap_weight) or not 0 <= overlap_weight <= 1:
         raise ValueError('overlap_weight must be finite and between 0 and 1.')
     if weighting not in ('document', 'page'):
         raise ValueError('weighting must be document or page.')
     models = validate(data)
-    normalized = {d: {m: {'pages': [clean(p) for p in r['pages']]}
-                      for m, r in records.items()} for d, records in data.items()}
+    normalized = {d: {m: {'pages': [], 'input_format': 'plain'} for m in records} for d, records in data.items()}
+    for document, records in data.items():
+        for index in range(len(records[models[0]]['pages'])):
+            texts = normalize_texts([records[m]['pages'][index] for m in models],
+                                    [records[m].get('input_format', 'markdown') for m in models])
+            for model, text in zip(models, texts):
+                normalized[document][model]['pages'].append(text)
     comparisons, volumes, excluded = [], [], []
     doc_scores = {}
     page_scores = {m: [] for m in models}
@@ -68,17 +73,18 @@ def evaluate(data, overlap_weight=0.5, weighting='document'):
             for m, text in texts.items():
                 volumes.append({'document': document, 'page': index + 1,
                                 'model': m, 'characters': len(text)})
-            if not any(texts.values()):
-                excluded.append({'document': document, 'page': index + 1, 'reason': 'all texts empty'})
+            if not any(tokens(t) for t in texts.values()):
+                excluded.append({'document': document, 'page': index + 1, 'reason': 'all texts lack scorable tokens'})
                 continue
             edges = {m: [] for m in models}
             for a, b in itertools.combinations(models, 2):
                 row = compare_page(document, index + 1, a, b, texts[a], texts[b])
                 # Empty-empty is not positive corroboration when others contain text.
-                if not texts[a] and not texts[b]:
+                if not tokens(texts[a]) and not tokens(texts[b]):
                     row['token_overlap'] = row['sequence_similarity'] = 0.0
                 row['combined_similarity'] = (overlap_weight * row['token_overlap']
                                               + (1 - overlap_weight) * row['sequence_similarity'])
+                row['primary_similarity'] = row['combined_similarity']
                 comparisons.append(row)
                 edges[a].append(row['combined_similarity'])
                 edges[b].append(row['combined_similarity'])
@@ -95,12 +101,16 @@ def evaluate(data, overlap_weight=0.5, weighting='document'):
     summary = []
     for a, b in itertools.combinations(models, 2):
         rows = [r for r in comparisons if r['left'] == a and r['right'] == b]
+        numeric = [r['numeric_agreement'] for r in rows if r['numeric_agreement'] is not None]
         summary.append({'left': a, 'right': b, 'pages': len(rows),
+                        'pages_with_numbers': len(numeric),
+                        'mean_numeric_agreement': statistics.mean(numeric) if numeric else None,
                         'mean_page_token_overlap': statistics.mean(r['token_overlap'] for r in rows),
                         'mean_page_sequence_similarity': statistics.mean(r['sequence_similarity'] for r in rows),
                         'mean_page_combined_similarity': statistics.mean(r['combined_similarity'] for r in rows)})
-    return {'schema_version': 1, 'meaning': 'Text consensus, not OCR accuracy',
-            'settings': {'overlap_weight': overlap_weight, 'sequence_weight': 1 - overlap_weight,
+    return {'schema_version': 3, 'algorithm_version': ALGORITHM_VERSION, 'meaning': 'Text consensus, not OCR accuracy',
+            'settings': {'primary_metric': 'token_count_overlap' if overlap_weight == 1 else 'custom_blend',
+                         'overlap_weight': overlap_weight, 'sequence_weight': 1 - overlap_weight,
                          'document_weighting': weighting, 'empty_pair_policy': 'zero when other methods have text'},
             'models': models, 'documents': list(normalized), 'ranking': rank(overall),
             'per_document_rankings': {d: rank(v) for d, v in doc_scores.items()},
@@ -112,7 +122,8 @@ def main():
     parser.add_argument('--input', type=Path, help='JSON: document -> model -> {pages: [text, ...]}; default reads repository OCR artifacts')
     parser.add_argument('--models', nargs='+', help='Evaluate only these model labels')
     parser.add_argument('--documents', nargs='+', help='Evaluate only these document IDs')
-    parser.add_argument('--overlap-weight', type=float, default=0.5)
+    parser.add_argument('--overlap-weight', type=float, default=1.0,
+                        help='Default 1: ignore reading order. Values below 1 opt into sequence scoring.')
     parser.add_argument('--weighting', choices=['document', 'page'], default='document')
     parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'cross_model')
     args = parser.parse_args()
@@ -123,7 +134,7 @@ def main():
             provenance = {'input_file': str(args.input.resolve()),
                           'input_sha256': hashlib.sha256(raw).hexdigest()}
         else:
-            data, provenance = load()
+            data, provenance = load(normalize=False)
         if args.documents:
             if len(args.documents) != len(set(args.documents)):
                 raise ValueError('Duplicate document selection.')
@@ -146,7 +157,7 @@ def main():
     lines = ['# Cross-model text evaluation', '',
              f"Documents: {len(result['documents'])}; methods: {len(result['models'])}; excluded all-empty pages: {len(result['excluded_pages'])}.", '',
              '**Scores measure consensus, not correctness.** No ground-truth model or structure score is used.', '',
-             f"Pair score = {args.overlap_weight:.2f} × token overlap + {1-args.overlap_weight:.2f} × symmetric sequence similarity. Average across peers, then use equal {args.weighting} weighting. Normalization ignores formatting, case and punctuation for scoring; numeric-string differences retain punctuation and leading zeroes.", '',
+             f"Pair score = {args.overlap_weight:.2f} × token overlap + {1-args.overlap_weight:.2f} × symmetric sequence similarity. Average across peers, then use equal {args.weighting} weighting. Scoring ignores formatting and case, but preserves signed numbers, numeric separators, percentages and leading zeroes. Numeric agreement is reported separately. Line hyphens are joined only when another output corroborates the joined word.", '',
              '| Rank | Saved model label | Consensus / 100 |', '|---:|---|---:|']
     for row in result['ranking']:
         lines.append(f"| {row['rank']} | {row['model'].replace('|', '/')} | {row['consensus_score']:.2f} |")

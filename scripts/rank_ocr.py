@@ -7,13 +7,14 @@ import random
 import statistics
 from pathlib import Path
 from ocr_common import ROOT, write_json
+from evaluate_outputs import ALGORITHM_VERSION
 
 OUT = ROOT / 'output' / 'performance'
 ENGINES = ['mistral', 'openai-6', 'fable-5-1', 'mineru']
 FAMILY = {'mistral':'mistral', 'mineru':'mineru', 'openai-6':'tesseract', 'fable-5-1':'tesseract'}
 
 
-def calculate(rows, overlap_weight=0.5, family_adjusted=False):
+def calculate(rows, overlap_weight=1.0, family_adjusted=False):
     by_page = collections.defaultdict(dict)
     for r in rows:
         by_page[r['document'],r['page']][frozenset((r['left'],r['right']))] = (
@@ -51,9 +52,9 @@ def main():
     score=aggregate(primary)
     per_doc={d:{e:statistics.mean(v[e]) for e in ENGINES} for d,v in primary.items()}
     variants={
-        'Primary: equal documents, 50% overlap / 50% sequence':score,
+        'Primary: equal documents, token-count overlap only':score,
         'Equal pages instead of equal documents':aggregate(primary,True),
-        'Overlap only, equal documents':aggregate(calculate(rows,1)),
+        'Legacy 50/50 overlap/sequence blend, equal documents':aggregate(calculate(rows,0.5)),
         'Sequence only, equal documents':aggregate(calculate(rows,0)),
         'Exclude same-family peers; equal peer-family weight':aggregate(calculate(rows,family_adjusted=True)),
     }
@@ -75,7 +76,8 @@ def main():
                      'page_resample_first_share':wins[e]/2000,
                      'page_resample_95_percentile_range':[100*values[49],100*values[1949]]})
     result={'algorithm':'Equal-document weighted consensus centrality',
-            'pair_score':'0.5 token overlap + 0.5 symmetric token-sequence similarity',
+            'algorithm_version':ALGORITHM_VERSION,
+            'pair_score':'token-count overlap only; sequence is a sensitivity diagnostic',
             'aggregation':'Mean of three peers per page, mean pages per document, mean of three documents',
             'meaning':'Similarity to peer outputs, not correctness or OCR accuracy',
             'ranking':rank,'per_document_scores':per_doc,'sensitivity_scores':variants,
@@ -85,8 +87,8 @@ def main():
     lines=['# Text-consensus ranking', '',
            f'**{ordered(score)[0]} ranks first under the primary consensus algorithm below.** This is the best consensus match among the four saved text outputs, not a demonstrated accuracy winner. No source transcription is treated as ground truth.', '',
            '## Algorithm', '',
-           'For each of the 48 pages, create a four-node similarity graph. The weight between two methods is 50% token overlap plus 50% symmetric token-sequence similarity. A method’s page score is its mean edge weight to the other three methods (weighted-degree centrality). Average its page scores within each document, then average the three document scores equally. Multiply by 100 for display.', '',
-           'Equal document weighting gives the 4-page board resolution, 14-page agreement and 30-page trade document the same influence. The 50/50 mixture balances shared words and word order; it is a stated judgment, not a trained or validated accuracy model. Tokenization ignores case and punctuation. Numeric spelling is reflected in tokens, but punctuation-only differences are not scored. Structure, field schemas, table formatting, speed and cost are excluded.', '',
+           'For each of the 48 pages, compare token-count overlap for every pair. A method’s page score is its mean agreement with the other three methods. Average its page scores within each document, then average the three document scores equally. Multiply by 100 for display. Reading order does not affect the primary score.', '',
+           'Equal document weighting gives the 4-page board resolution, 14-page agreement and 30-page trade document the same influence. Signed numbers, decimal separators and percentages are preserved. Sequence scoring is shown only in sensitivity variants. Identical token counts may hide incorrect word associations. Structure, field schemas, table formatting, speed and cost are excluded.', '',
            '| Rank | Saved method | Consensus score / 100 | First in page resamples |',
            '|---:|---|---:|---:|']
     for r in rank:lines.append(f"| {r['rank']} | {r['method']} | {r['consensus_score']:.2f} | {r['page_resample_first_share']:.1%} |")

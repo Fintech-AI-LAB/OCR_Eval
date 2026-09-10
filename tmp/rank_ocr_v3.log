@@ -1,0 +1,106 @@
+{
+  "algorithm": "Equal-document weighted consensus centrality",
+  "algorithm_version": "3.0",
+  "pair_score": "token-count overlap only; sequence is a sensitivity diagnostic",
+  "aggregation": "Mean of three peers per page, mean pages per document, mean of three documents",
+  "meaning": "Similarity to peer outputs, not correctness or OCR accuracy",
+  "ranking": [
+    {
+      "rank": 1,
+      "method": "mistral",
+      "consensus_score": 89.2269539037088,
+      "page_resample_first_share": 1.0,
+      "page_resample_95_percentile_range": [
+        80.3223762911468,
+        95.3768613792701
+      ]
+    },
+    {
+      "rank": 2,
+      "method": "openai-6",
+      "consensus_score": 88.03468813855591,
+      "page_resample_first_share": 0.0,
+      "page_resample_95_percentile_range": [
+        79.13918801428576,
+        94.37902191251203
+      ]
+    },
+    {
+      "rank": 3,
+      "method": "mineru",
+      "consensus_score": 86.50518766003914,
+      "page_resample_first_share": 0.0,
+      "page_resample_95_percentile_range": [
+        74.36118238835425,
+        94.52482314401117
+      ]
+    },
+    {
+      "rank": 4,
+      "method": "fable-5-1",
+      "consensus_score": 84.49474695332792,
+      "page_resample_first_share": 0.0,
+      "page_resample_95_percentile_range": [
+        74.65459927640117,
+        92.37181986589339
+      ]
+    }
+  ],
+  "per_document_scores": {
+    "board": {
+      "mistral": 0.7827001259205353,
+      "openai-6": 0.7691822998607276,
+      "fable-5-1": 0.6741092779621184,
+      "mineru": 0.7109822301618342
+    },
+    "csa": {
+      "mistral": 0.9854357793465317,
+      "openai-6": 0.9817242116980881,
+      "fable-5-1": 0.9813553106324704,
+      "mineru": 0.9849505086192919
+    },
+    "trade": {
+      "mistral": 0.9086727118441972,
+      "openai-6": 0.8901341325978613,
+      "fable-5-1": 0.8793778200052486,
+      "mineru": 0.899222891020048
+    }
+  },
+  "sensitivity_scores": {
+    "Primary: equal documents, token-count overlap only": {
+      "mistral": 0.892269539037088,
+      "openai-6": 0.880346881385559,
+      "fable-5-1": 0.8449474695332791,
+      "mineru": 0.8650518766003914
+    },
+    "Equal pages instead of equal documents": {
+      "mistral": 0.920564224372073,
+      "openai-6": 0.9067685862739997,
+      "fable-5-1": 0.8920155429345941,
+      "mineru": 0.9085400577483097
+    },
+    "Legacy 50/50 overlap/sequence blend, equal documents": {
+      "mistral": 0.8815868905157396,
+      "openai-6": 0.8663208301744857,
+      "fable-5-1": 0.8303540218779173,
+      "mineru": 0.854883731583224
+    },
+    "Sequence only, equal documents": {
+      "mistral": 0.8709042419943911,
+      "openai-6": 0.8522947789634123,
+      "fable-5-1": 0.8157605742225555,
+      "mineru": 0.8447155865660565
+    },
+    "Exclude same-family peers; equal peer-family weight": {
+      "mistral": 0.8947171711086668,
+      "openai-6": 0.893510586955618,
+      "fable-5-1": 0.8404114691771981,
+      "mineru": 0.8743039242811443
+    }
+  },
+  "resampling": {
+    "repetitions": 2000,
+    "seed": 20260910,
+    "meaning": "Descriptive stability under within-document page resampling; not probability of being correct"
+  }
+}

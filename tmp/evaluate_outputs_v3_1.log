@@ -1,0 +1,7 @@
+Generated text-only comparison: 12 document/output records, 288 page pairs.
+{'document': 'all', 'left': 'mistral', 'right': 'openai-6', 'pages': 48, 'token_overlap': 0.9569273376576052, 'mean_page_sequence_similarity': 0.8891509912213611}
+{'document': 'all', 'left': 'mistral', 'right': 'fable-5-1', 'pages': 48, 'token_overlap': 0.9538281706604325, 'mean_page_sequence_similarity': 0.8623348603008961}
+{'document': 'all', 'left': 'mistral', 'right': 'mineru', 'pages': 48, 'token_overlap': 0.9795501022494888, 'mean_page_sequence_similarity': 0.9473165855976837}
+{'document': 'all', 'left': 'openai-6', 'right': 'fable-5-1', 'pages': 48, 'token_overlap': 0.9588628516858885, 'mean_page_sequence_similarity': 0.8912186212817349}
+{'document': 'all', 'left': 'openai-6', 'right': 'mineru', 'pages': 48, 'token_overlap': 0.947565543071161, 'mean_page_sequence_similarity': 0.8681492974254768}
+{'document': 'all', 'left': 'fable-5-1', 'right': 'mineru', 'pages': 48, 'token_overlap': 0.9491313309776207, 'mean_page_sequence_similarity': 0.8522528586000165}

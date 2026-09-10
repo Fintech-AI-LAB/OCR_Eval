@@ -1,5 +1,6 @@
 """Score agreement among OCR output files for one physical page (0–100)."""
 import argparse
+from collections import Counter
 import itertools
 import json
 import math
@@ -7,9 +8,9 @@ import statistics
 from pathlib import Path
 
 if __package__:
-    from .evaluate_outputs import clean, compare_page, tokens
+    from .evaluate_outputs import ALGORITHM_VERSION, counter_overlap, normalize_texts, compare_page, tokens
 else:
-    from evaluate_outputs import clean, compare_page, tokens
+    from evaluate_outputs import ALGORITHM_VERSION, counter_overlap, normalize_texts, compare_page, tokens
 
 
 def _json_text(value):
@@ -38,16 +39,31 @@ def _json_text(value):
     raise ValueError('Unsupported page JSON; provide a text/Markdown file or a supported single-page OCR JSON.')
 
 
+def _json_format(value):
+    if isinstance(value, dict):
+        if 'pages' in value and isinstance(value['pages'], list) and len(value['pages']) == 1:
+            return _json_format(value['pages'][0])
+        if 'markdown' in value:
+            return 'markdown'
+        if any(key in value for key in ('full_page_text', 'text', 'lines')):
+            return 'plain'
+    return 'markdown'
+
+
 def _read_page(path):
     path = Path(path)
     if path.suffix.lower() not in ('.txt', '.md', '.markdown', '.html', '.htm', '.json'):
         raise ValueError(f'{path}: expected an OCR text, Markdown, HTML or JSON file.')
     text = path.read_text(encoding='utf-8-sig')
-    return clean(_json_text(json.loads(text)) if path.suffix.lower() == '.json' else text)
+    suffix = path.suffix.lower()
+    if suffix == '.json':
+        value = json.loads(text)
+        return _json_text(value), _json_format(value)
+    return text, 'plain' if suffix == '.txt' else 'html' if suffix in ('.html', '.htm') else 'markdown'
 
 
-def score_models(file_paths, overlap_weight=0.5):
-    """Return one consensus score per input file, in input order.
+def _evaluate_page(file_paths, overlap_weight=1.0, diagnostics=True):
+    """Return the primary score, per-file scores, and separate pair diagnostics.
 
     Inputs must be distinct OCR output files for the same physical page.
     At least two outputs are required; with two, their scores are identical.
@@ -61,28 +77,50 @@ def score_models(file_paths, overlap_weight=0.5):
     paths = [Path(p).resolve() for p in file_paths]
     if len(set(paths)) != len(paths):
         raise ValueError('Duplicate file paths would inflate agreement.')
-    texts = [_read_page(p) for p in paths]
-    has_tokens = [bool(tokens(text)) for text in texts]
+    sources = [_read_page(p) for p in paths]
+    texts = normalize_texts([s[0] for s in sources], [s[1] for s in sources])
+    counts = [Counter(tokens(text)) for text in texts]
+    has_tokens = [bool(c) for c in counts]
     if not any(has_tokens):
         raise ValueError('All outputs lack scorable text; exclude this page from the average.')
     scores = [[] for _ in paths]
+    pairs = []
     for a, b in itertools.combinations(range(len(paths)), 2):
-        if not has_tokens[a] and not has_tokens[b]:
-            similarity = 0.0
+        if not diagnostics and overlap_weight == 1:
+            similarity = counter_overlap(counts[a], counts[b])
         else:
             pair = compare_page('page', 1, str(paths[a]), str(paths[b]), texts[a], texts[b])
             similarity = (overlap_weight * pair['token_overlap'] +
                           (1 - overlap_weight) * pair['sequence_similarity'])
+            if diagnostics:
+                pair['primary_similarity'] = similarity
+                pairs.append(pair)
         scores[a].append(100 * similarity)
         scores[b].append(100 * similarity)
-    return [statistics.mean(values) for values in scores]
+    model_scores = [statistics.mean(values) for values in scores]
+    return {'algorithm_version': ALGORITHM_VERSION, 'score': statistics.mean(model_scores),
+            'model_scores': model_scores, 'files': [str(p) for p in paths],
+            'settings': {'overlap_weight': overlap_weight, 'sequence_weight': 1 - overlap_weight,
+                         'primary_metric': 'token_count_overlap' if overlap_weight == 1 else 'custom_blend'},
+            'pairs': pairs}
 
 
-def score_page(file_paths, overlap_weight=0.5):
+def score_page_details(file_paths, overlap_weight=1.0):
+    """Return scores and pairwise token, sequence, numeric and text-difference diagnostics."""
+    return _evaluate_page(file_paths, overlap_weight, diagnostics=True)
+
+
+def score_models(file_paths, overlap_weight=1.0):
+    """Return one 0–100 primary consensus score per file, in input order."""
+    return _evaluate_page(file_paths, overlap_weight, diagnostics=False)['model_scores']
+
+
+def score_page(file_paths, overlap_weight=1.0):
     """Return a single 0–100 score: mean agreement across all output pairs.
 
-    100 means identical normalized tokens, 0 means no agreement. This measures
-    consensus, not accuracy. Average these scalar scores to weight pages equally.
+    By default 100 means identical normalized token counts, regardless of order.
+    This measures consensus, not accuracy. Average scores to weight pages equally.
+    Set overlap_weight explicitly below 1 only to opt into reading-order penalties.
     """
     return statistics.mean(score_models(file_paths, overlap_weight))
 
@@ -90,7 +128,8 @@ def score_page(file_paths, overlap_weight=0.5):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('files', nargs='+', type=Path)
-    parser.add_argument('--overlap-weight', type=float, default=0.5)
+    parser.add_argument('--overlap-weight', type=float, default=1.0,
+                        help='Default 1: ignore reading order. Values below 1 opt into sequence scoring.')
     args = parser.parse_args()
     try:
         print(score_page(args.files, args.overlap_weight))
