@@ -1,0 +1,22 @@
+{
+  "example": {
+    "0": {
+      "pages": [
+        "IBAN hello"
+      ],
+      "input_format": "plain"
+    },
+    "1": {
+      "pages": [
+        "IBAN typo"
+      ],
+      "input_format": "plain"
+    },
+    "2": {
+      "pages": [
+        "typo hello"
+      ],
+      "input_format": "plain"
+    }
+  }
+}

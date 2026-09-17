@@ -1,0 +1,146 @@
+[
+  {
+    "ontology_weighted_overlap": 0.75,
+    "ontology_entity_agreement": 1.0,
+    "ontology_weighted_total": 8.0,
+    "ontology_weighted_shared": 3.0,
+    "left_ontology_entities": {
+      "iban": 1
+    },
+    "right_ontology_entities": {
+      "iban": 1
+    },
+    "unmatched_left_ontology_entities": {},
+    "unmatched_right_ontology_entities": {},
+    "document": "example",
+    "page": 1,
+    "left": "0",
+    "right": "1",
+    "left_tokens": 2,
+    "right_tokens": 2,
+    "shared_token_occurrences": 1,
+    "token_overlap": 0.5,
+    "sequence_similarity": 0.5,
+    "numeric_agreement": null,
+    "only_left_numeric_strings": [],
+    "only_right_numeric_strings": [],
+    "unmatched_left_numeric_counts": {},
+    "unmatched_right_numeric_counts": {},
+    "changes": [
+      {
+        "kind": "replace",
+        "left_tokens": [
+          "hello"
+        ],
+        "right_tokens": [
+          "typo"
+        ],
+        "left_offset": 1,
+        "right_offset": 1,
+        "left_context": "iban hello",
+        "right_context": "iban typo"
+      }
+    ],
+    "combined_similarity": 0.75,
+    "primary_similarity": 0.75
+  },
+  {
+    "ontology_weighted_overlap": 0.3333333333333333,
+    "ontology_entity_agreement": 0.0,
+    "ontology_weighted_total": 6.0,
+    "ontology_weighted_shared": 1.0,
+    "left_ontology_entities": {
+      "iban": 1
+    },
+    "right_ontology_entities": {},
+    "unmatched_left_ontology_entities": {
+      "iban": 1
+    },
+    "unmatched_right_ontology_entities": {},
+    "document": "example",
+    "page": 1,
+    "left": "0",
+    "right": "2",
+    "left_tokens": 2,
+    "right_tokens": 2,
+    "shared_token_occurrences": 1,
+    "token_overlap": 0.5,
+    "sequence_similarity": 0.5,
+    "numeric_agreement": null,
+    "only_left_numeric_strings": [],
+    "only_right_numeric_strings": [],
+    "unmatched_left_numeric_counts": {},
+    "unmatched_right_numeric_counts": {},
+    "changes": [
+      {
+        "kind": "replace",
+        "left_tokens": [
+          "iban"
+        ],
+        "right_tokens": [
+          "typo"
+        ],
+        "left_offset": 0,
+        "right_offset": 0,
+        "left_context": "iban hello",
+        "right_context": "typo hello"
+      }
+    ],
+    "combined_similarity": 0.3333333333333333,
+    "primary_similarity": 0.3333333333333333
+  },
+  {
+    "ontology_weighted_overlap": 0.3333333333333333,
+    "ontology_entity_agreement": 0.0,
+    "ontology_weighted_total": 6.0,
+    "ontology_weighted_shared": 1.0,
+    "left_ontology_entities": {
+      "iban": 1
+    },
+    "right_ontology_entities": {},
+    "unmatched_left_ontology_entities": {
+      "iban": 1
+    },
+    "unmatched_right_ontology_entities": {},
+    "document": "example",
+    "page": 1,
+    "left": "1",
+    "right": "2",
+    "left_tokens": 2,
+    "right_tokens": 2,
+    "shared_token_occurrences": 1,
+    "token_overlap": 0.5,
+    "sequence_similarity": 0.5,
+    "numeric_agreement": null,
+    "only_left_numeric_strings": [],
+    "only_right_numeric_strings": [],
+    "unmatched_left_numeric_counts": {},
+    "unmatched_right_numeric_counts": {},
+    "changes": [
+      {
+        "kind": "delete",
+        "left_tokens": [
+          "iban"
+        ],
+        "right_tokens": [],
+        "left_offset": 0,
+        "right_offset": 0,
+        "left_context": "iban typo",
+        "right_context": "typo hello"
+      },
+      {
+        "kind": "insert",
+        "left_tokens": [],
+        "right_tokens": [
+          "hello"
+        ],
+        "left_offset": 2,
+        "right_offset": 1,
+        "left_context": "iban typo",
+        "right_context": "typo hello"
+      }
+    ],
+    "combined_similarity": 0.3333333333333333,
+    "primary_similarity": 0.3333333333333333
+  }
+]

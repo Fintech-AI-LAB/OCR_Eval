@@ -56,19 +56,22 @@ remain text tokens if present in an output.
 
 ### Primary pairwise score
 
-For two texts A and B, let `count_A(t)` and `count_B(t)` be the occurrence counts
-of token t. Define:
+Ontology concept and field mentions from `document_ontology.json` receive weight 3;
+other tokens receive weight 1. Names are matched case-insensitively using longest
+nonoverlapping phrases, with both CamelCase and spaced forms in the vocabulary.
+Definitions and provenance are not terms. Matching does not infer entity values.
 
 ```text
-shared(A, B) = sum over tokens t of min(count_A(t), count_B(t))
-overlap(A, B) = 2 × shared(A, B) / (token_count(A) + token_count(B))
+weighted_total = total token occurrences + 2 × token occurrences in matched phrases
+weighted_shared = shared token occurrences + 2 × token occurrences in shared phrases
+weighted_overlap = 2 × weighted_shared / weighted_total
 ```
 
-This is a multiset Dice coefficient between 0 and 1. For example, `a a b`
-versus `a b` has two shared occurrences and scores `2 × 2 / 5 = 0.8`.
-Reordering tokens does not change the score. Missing text, extra repetitions
-and changed numeric tokens can lower it. No sequence or structure weight is
-added to the primary score.
+Shared counts use the minimum occurrence count on either side. Repeated phrases
+count; overlapping phrases are not counted twice. Moving intact phrases leaves
+the score unchanged, but breaking a phrase can change its classification.
+Unweighted token overlap remains a diagnostic. No sequence or structure weight
+is added to the primary score. Settings include the ontology SHA-256 and weight.
 
 ### Aggregation and ranking
 
@@ -76,7 +79,7 @@ With five methods, there are ten pairs per document and thirty pairs in this run
 Each method is compared with its four peers:
 
 ```text
-document_score(method, document) = 100 × mean(overlap with each of four peers)
+document_score(method, document) = 100 × mean(weighted overlap with each of four peers)
 final_score(method) = mean(document_score across the three documents)
 ```
 
@@ -175,7 +178,7 @@ def main():
         writer.writerows(result['ranking'])
     lines = ['# Five-method text consensus comparison', '',
              'Three complete documents; each document has equal weight. Insavlo lacks consistent physical page boundaries, so this is a whole-document comparison, not a page-average comparison. All methods use the same document scope.', '',
-             f'Algorithm version {ALGORITHM_VERSION}: primary agreement is token-count overlap, independent of reading order. Each method is scored against its four peers, then averaged across documents. Formatting and case are ignored; signed numbers, decimal separators, accounting parentheses and percentages are retained. Sequence similarity and numeric agreement are separate diagnostics and do not contribute additional weight to the ranking. Numeric agreement counts repeated occurrences. Numeric tokens are included in token overlap. No structure or layout score is used. A reordered text can receive 100 even when word associations differ; this is a content-consensus measure.', '',
+             f'Algorithm version {ALGORITHM_VERSION}: primary agreement is ontology-weighted overlap (3× for concept/field mentions, 1× for other tokens). Matching is lexical; values are not inferred. Each method is scored against its four peers, then averaged across documents. Formatting and case are ignored; signed numbers, decimal separators, accounting parentheses and percentages are retained. Sequence similarity and numeric agreement are separate diagnostics and do not contribute additional weight to the ranking. Numeric agreement counts repeated occurrences. Numeric tokens are included in token overlap. No structure or layout score is used. A text with reordered intact phrases can receive 100 even when word associations differ; this is a content-consensus measure.', '',
              '**Consensus is not accuracy.** Shared errors can increase scores. The openai-6 and fable-5-1 artifacts describe Tesseract with visual review; their folder labels do not verify the named models. Insavlo has no model provenance metadata. No OCR was rerun.', '',
              '| Rank | Method | Mean consensus / 100 | CSA | Board | Trade |',
              '|---:|---|---:|---:|---:|---:|']

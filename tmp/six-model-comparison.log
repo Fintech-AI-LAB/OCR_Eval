@@ -1,0 +1,39 @@
+/opt/miniconda3/lib/python3.13/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+/opt/miniconda3/lib/python3.13/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+/opt/miniconda3/lib/python3.13/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+[
+  {
+    "rank": 1,
+    "model": "mistral",
+    "consensus_score": 92.30685463626772
+  },
+  {
+    "rank": 2,
+    "model": "insavlo",
+    "consensus_score": 91.86246400453814
+  },
+  {
+    "rank": 3,
+    "model": "mineru",
+    "consensus_score": 91.64207584436016
+  },
+  {
+    "rank": 4,
+    "model": "openai-6",
+    "consensus_score": 90.80235547080737
+  },
+  {
+    "rank": 5,
+    "model": "fable-5-1",
+    "consensus_score": 89.02499344452004
+  },
+  {
+    "rank": 6,
+    "model": "deepseek",
+    "consensus_score": 85.00910592915426
+  }
+]
+/Users/yimingqian/Documents/GitHub/OCR_Eval/output/six_model_comparison/report.md

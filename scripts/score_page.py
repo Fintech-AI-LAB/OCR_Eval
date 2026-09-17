@@ -1,6 +1,5 @@
 """Score agreement among OCR output files for one physical page (0–100)."""
 import argparse
-from collections import Counter
 import itertools
 import json
 import math
@@ -8,9 +7,11 @@ import statistics
 from pathlib import Path
 
 if __package__:
-    from .evaluate_outputs import ALGORITHM_VERSION, counter_overlap, normalize_texts, compare_page, tokens
+    from .ontology_metrics import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, ontology_metrics, load_ontology, validate_entity_weight
+    from .evaluate_outputs import ALGORITHM_VERSION, normalize_texts, compare_page, tokens
 else:
-    from evaluate_outputs import ALGORITHM_VERSION, counter_overlap, normalize_texts, compare_page, tokens
+    from ontology_metrics import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, ontology_metrics, load_ontology, validate_entity_weight
+    from evaluate_outputs import ALGORITHM_VERSION, normalize_texts, compare_page, tokens
 
 
 def _json_text(value):
@@ -62,7 +63,8 @@ def _read_page(path):
     return text, 'plain' if suffix == '.txt' else 'html' if suffix in ('.html', '.htm') else 'markdown'
 
 
-def _evaluate_page(file_paths, overlap_weight=1.0, diagnostics=True):
+def _evaluate_page(file_paths, overlap_weight=1.0, diagnostics=True,
+                   ontology_path=DEFAULT_ONTOLOGY, entity_weight=DEFAULT_ENTITY_WEIGHT):
     """Return the primary score, per-file scores, and separate pair diagnostics.
 
     Inputs must be distinct OCR output files for the same physical page.
@@ -74,23 +76,24 @@ def _evaluate_page(file_paths, overlap_weight=1.0, diagnostics=True):
         raise ValueError('Provide an array of at least two file paths for one page.')
     if not math.isfinite(overlap_weight) or not 0 <= overlap_weight <= 1:
         raise ValueError('overlap_weight must be finite and between 0 and 1.')
+    validate_entity_weight(entity_weight)
+    _, ontology_metadata = load_ontology(ontology_path)
     paths = [Path(p).resolve() for p in file_paths]
     if len(set(paths)) != len(paths):
         raise ValueError('Duplicate file paths would inflate agreement.')
     sources = [_read_page(p) for p in paths]
     texts = normalize_texts([s[0] for s in sources], [s[1] for s in sources])
-    counts = [Counter(tokens(text)) for text in texts]
-    has_tokens = [bool(c) for c in counts]
+    has_tokens = [bool(tokens(text)) for text in texts]
     if not any(has_tokens):
         raise ValueError('All outputs lack scorable text; exclude this page from the average.')
     scores = [[] for _ in paths]
     pairs = []
     for a, b in itertools.combinations(range(len(paths)), 2):
         if not diagnostics and overlap_weight == 1:
-            similarity = counter_overlap(counts[a], counts[b])
+            similarity = ontology_metrics(tokens(texts[a]), tokens(texts[b]), ontology_path, entity_weight)['ontology_weighted_overlap']
         else:
-            pair = compare_page('page', 1, str(paths[a]), str(paths[b]), texts[a], texts[b])
-            similarity = (overlap_weight * pair['token_overlap'] +
+            pair = compare_page('page', 1, str(paths[a]), str(paths[b]), texts[a], texts[b], ontology_path, entity_weight)
+            similarity = (overlap_weight * pair['ontology_weighted_overlap'] +
                           (1 - overlap_weight) * pair['sequence_similarity'])
             if diagnostics:
                 pair['primary_similarity'] = similarity
@@ -100,29 +103,34 @@ def _evaluate_page(file_paths, overlap_weight=1.0, diagnostics=True):
     model_scores = [statistics.mean(values) for values in scores]
     return {'algorithm_version': ALGORITHM_VERSION, 'score': statistics.mean(model_scores),
             'model_scores': model_scores, 'files': [str(p) for p in paths],
-            'settings': {'overlap_weight': overlap_weight, 'sequence_weight': 1 - overlap_weight,
-                         'primary_metric': 'token_count_overlap' if overlap_weight == 1 else 'custom_blend'},
+            'settings': {'ontology': ontology_metadata, 'entity_weight': entity_weight,
+                         'overlap_weight': overlap_weight, 'sequence_weight': 1 - overlap_weight,
+                         'primary_metric': 'ontology_weighted_token_overlap' if overlap_weight == 1 else 'custom_blend'},
             'pairs': pairs}
 
 
-def score_page_details(file_paths, overlap_weight=1.0):
+def score_page_details(file_paths, overlap_weight=1.0, *, ontology_path=DEFAULT_ONTOLOGY,
+               entity_weight=DEFAULT_ENTITY_WEIGHT):
     """Return scores and pairwise token, sequence, numeric and text-difference diagnostics."""
-    return _evaluate_page(file_paths, overlap_weight, diagnostics=True)
+    return _evaluate_page(file_paths, overlap_weight, diagnostics=True, ontology_path=ontology_path, entity_weight=entity_weight)
 
 
-def score_models(file_paths, overlap_weight=1.0):
+def score_models(file_paths, overlap_weight=1.0, *, ontology_path=DEFAULT_ONTOLOGY,
+               entity_weight=DEFAULT_ENTITY_WEIGHT):
     """Return one 0–100 primary consensus score per file, in input order."""
-    return _evaluate_page(file_paths, overlap_weight, diagnostics=False)['model_scores']
+    return _evaluate_page(file_paths, overlap_weight, diagnostics=False, ontology_path=ontology_path, entity_weight=entity_weight)['model_scores']
 
 
-def score_page(file_paths, overlap_weight=1.0):
+def score_page(file_paths, overlap_weight=1.0, *, ontology_path=DEFAULT_ONTOLOGY,
+               entity_weight=DEFAULT_ENTITY_WEIGHT):
     """Return a single 0–100 score: mean agreement across all output pairs.
 
-    By default 100 means identical normalized token counts, regardless of order.
+    Ontology concept/field mentions receive 3x weight by default.
+    Phrase membership depends on adjacent words; global reading order is ignored.
     This measures consensus, not accuracy. Average scores to weight pages equally.
     Set overlap_weight explicitly below 1 only to opt into reading-order penalties.
     """
-    return statistics.mean(score_models(file_paths, overlap_weight))
+    return statistics.mean(score_models(file_paths, overlap_weight, ontology_path=ontology_path, entity_weight=entity_weight))
 
 
 if __name__ == '__main__':
@@ -130,8 +138,10 @@ if __name__ == '__main__':
     parser.add_argument('files', nargs='+', type=Path)
     parser.add_argument('--overlap-weight', type=float, default=1.0,
                         help='Default 1: ignore reading order. Values below 1 opt into sequence scoring.')
+    parser.add_argument('--ontology', type=Path, default=DEFAULT_ONTOLOGY)
+    parser.add_argument('--entity-weight', type=float, default=DEFAULT_ENTITY_WEIGHT)
     args = parser.parse_args()
     try:
-        print(score_page(args.files, args.overlap_weight))
+        print(score_page(args.files, args.overlap_weight, ontology_path=args.ontology, entity_weight=args.entity_weight))
     except (ValueError, OSError, KeyError, TypeError) as error:
         parser.error(str(error))

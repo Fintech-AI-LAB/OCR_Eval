@@ -1,0 +1,104 @@
+{
+  "schema_version": 4,
+  "algorithm_version": "4.0",
+  "meaning": "Text consensus, not OCR accuracy",
+  "settings": {
+    "ontology": {
+      "path": "/Users/yimingqian/Documents/GitHub/OCR_Eval/document_ontology.json",
+      "sha256": "d8d4f65e6eba4fc358fa2c78c3576cbc6eda825a65aac0534558c61e14fad3db",
+      "concept_count": 93,
+      "phrase_count": 7583,
+      "matching": "case-insensitive longest nonoverlapping concept/field phrases; no value inference"
+    },
+    "entity_weight": 3.0,
+    "primary_metric": "ontology_weighted_token_overlap",
+    "overlap_weight": 1.0,
+    "sequence_weight": 0.0,
+    "document_weighting": "document",
+    "empty_pair_policy": "zero when other methods have text"
+  },
+  "models": [
+    "0",
+    "1",
+    "2"
+  ],
+  "documents": [
+    "example"
+  ],
+  "ranking": [
+    {
+      "rank": 1,
+      "model": "0",
+      "consensus_score": 54.166666666666664
+    },
+    {
+      "rank": 1,
+      "model": "1",
+      "consensus_score": 54.166666666666664
+    },
+    {
+      "rank": 3,
+      "model": "2",
+      "consensus_score": 33.33333333333333
+    }
+  ],
+  "per_document_rankings": {
+    "example": [
+      {
+        "rank": 1,
+        "model": "0",
+        "consensus_score": 54.166666666666664
+      },
+      {
+        "rank": 1,
+        "model": "1",
+        "consensus_score": 54.166666666666664
+      },
+      {
+        "rank": 3,
+        "model": "2",
+        "consensus_score": 33.33333333333333
+      }
+    ]
+  },
+  "excluded_pages": [],
+  "pairwise_summary": [
+    {
+      "left": "0",
+      "right": "1",
+      "pages": 1,
+      "pages_with_numbers": 0,
+      "mean_numeric_agreement": null,
+      "mean_page_ontology_weighted_overlap": 0.75,
+      "mean_page_token_overlap": 0.5,
+      "mean_page_sequence_similarity": 0.5,
+      "mean_page_combined_similarity": 0.75
+    },
+    {
+      "left": "0",
+      "right": "2",
+      "pages": 1,
+      "pages_with_numbers": 0,
+      "mean_numeric_agreement": null,
+      "mean_page_ontology_weighted_overlap": 0.3333333333333333,
+      "mean_page_token_overlap": 0.5,
+      "mean_page_sequence_similarity": 0.5,
+      "mean_page_combined_similarity": 0.3333333333333333
+    },
+    {
+      "left": "1",
+      "right": "2",
+      "pages": 1,
+      "pages_with_numbers": 0,
+      "mean_numeric_agreement": null,
+      "mean_page_ontology_weighted_overlap": 0.3333333333333333,
+      "mean_page_token_overlap": 0.5,
+      "mean_page_sequence_similarity": 0.5,
+      "mean_page_combined_similarity": 0.3333333333333333
+    }
+  ],
+  "provenance": {
+    "input_file": "/Users/yimingqian/Documents/GitHub/OCR_Eval/tmp/ontology-smoke/input.json",
+    "input_sha256": "bbfe5e7ad3b79a1c4c453179dd0234eb9c71f8028b7f255e6fa9c9ce1adffaf6"
+  }
+}

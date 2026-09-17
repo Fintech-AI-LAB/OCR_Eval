@@ -11,6 +11,7 @@ from pathlib import Path
 
 from evaluate_outputs import ALGORITHM_VERSION, normalize_texts, tokens, compare_page, load
 from ocr_common import ROOT, write_json
+from ontology_metrics import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, load_ontology, validate_entity_weight
 
 
 def validate(data):
@@ -50,7 +51,10 @@ def rank(scores):
     return result
 
 
-def evaluate(data, overlap_weight=1.0, weighting='document'):
+def evaluate(data, overlap_weight=1.0, weighting='document', ontology_path=DEFAULT_ONTOLOGY,
+             entity_weight=DEFAULT_ENTITY_WEIGHT):
+    validate_entity_weight(entity_weight)
+    _, ontology_metadata = load_ontology(ontology_path)
     if not math.isfinite(overlap_weight) or not 0 <= overlap_weight <= 1:
         raise ValueError('overlap_weight must be finite and between 0 and 1.')
     if weighting not in ('document', 'page'):
@@ -78,11 +82,11 @@ def evaluate(data, overlap_weight=1.0, weighting='document'):
                 continue
             edges = {m: [] for m in models}
             for a, b in itertools.combinations(models, 2):
-                row = compare_page(document, index + 1, a, b, texts[a], texts[b])
+                row = compare_page(document, index + 1, a, b, texts[a], texts[b], ontology_path, entity_weight)
                 # Empty-empty is not positive corroboration when others contain text.
                 if not tokens(texts[a]) and not tokens(texts[b]):
                     row['token_overlap'] = row['sequence_similarity'] = 0.0
-                row['combined_similarity'] = (overlap_weight * row['token_overlap']
+                row['combined_similarity'] = (overlap_weight * row['ontology_weighted_overlap']
                                               + (1 - overlap_weight) * row['sequence_similarity'])
                 row['primary_similarity'] = row['combined_similarity']
                 comparisons.append(row)
@@ -105,11 +109,13 @@ def evaluate(data, overlap_weight=1.0, weighting='document'):
         summary.append({'left': a, 'right': b, 'pages': len(rows),
                         'pages_with_numbers': len(numeric),
                         'mean_numeric_agreement': statistics.mean(numeric) if numeric else None,
+                        'mean_page_ontology_weighted_overlap': statistics.mean(r['ontology_weighted_overlap'] for r in rows),
                         'mean_page_token_overlap': statistics.mean(r['token_overlap'] for r in rows),
                         'mean_page_sequence_similarity': statistics.mean(r['sequence_similarity'] for r in rows),
                         'mean_page_combined_similarity': statistics.mean(r['combined_similarity'] for r in rows)})
-    return {'schema_version': 3, 'algorithm_version': ALGORITHM_VERSION, 'meaning': 'Text consensus, not OCR accuracy',
-            'settings': {'primary_metric': 'token_count_overlap' if overlap_weight == 1 else 'custom_blend',
+    return {'schema_version': 4, 'algorithm_version': ALGORITHM_VERSION, 'meaning': 'Text consensus, not OCR accuracy',
+            'settings': {'ontology': ontology_metadata, 'entity_weight': entity_weight,
+                         'primary_metric': 'ontology_weighted_token_overlap' if overlap_weight == 1 else 'custom_blend',
                          'overlap_weight': overlap_weight, 'sequence_weight': 1 - overlap_weight,
                          'document_weighting': weighting, 'empty_pair_policy': 'zero when other methods have text'},
             'models': models, 'documents': list(normalized), 'ranking': rank(overall),
@@ -126,6 +132,9 @@ def main():
                         help='Default 1: ignore reading order. Values below 1 opt into sequence scoring.')
     parser.add_argument('--weighting', choices=['document', 'page'], default='document')
     parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'cross_model')
+    parser.add_argument('--ontology', type=Path, default=DEFAULT_ONTOLOGY)
+    parser.add_argument('--entity-weight', type=float, default=DEFAULT_ENTITY_WEIGHT,
+                        help='Ontology mention weight (default 3); use 1 for unweighted scoring.')
     args = parser.parse_args()
     try:
         if args.input:
@@ -143,7 +152,7 @@ def main():
             if len(args.models) != len(set(args.models)):
                 raise ValueError('Duplicate model selection.')
             data = {d: {m: records[m] for m in args.models} for d, records in data.items()}
-        result, pairs, volumes, normalized = evaluate(data, args.overlap_weight, args.weighting)
+        result, pairs, volumes, normalized = evaluate(data, args.overlap_weight, args.weighting, args.ontology, args.entity_weight)
     except (ValueError, KeyError, OSError, TypeError) as error:
         parser.error(str(error))
     result['provenance'] = provenance
@@ -157,7 +166,8 @@ def main():
     lines = ['# Cross-model text evaluation', '',
              f"Documents: {len(result['documents'])}; methods: {len(result['models'])}; excluded all-empty pages: {len(result['excluded_pages'])}.", '',
              '**Scores measure consensus, not correctness.** No ground-truth model or structure score is used.', '',
-             f"Pair score = {args.overlap_weight:.2f} × token overlap + {1-args.overlap_weight:.2f} × symmetric sequence similarity. Average across peers, then use equal {args.weighting} weighting. Scoring ignores formatting and case, but preserves signed numbers, numeric separators, percentages and leading zeroes. Numeric agreement is reported separately. Line hyphens are joined only when another output corroborates the joined word.", '',
+             f"Pair score = {args.overlap_weight:.2f} × ontology-weighted token overlap + {1-args.overlap_weight:.2f} × symmetric sequence similarity. Average across peers, then use equal {args.weighting} weighting. Scoring ignores formatting and case, but preserves signed numbers, numeric separators, percentages and leading zeroes. Numeric agreement is reported separately. Line hyphens are joined only when another output corroborates the joined word.", '',
+             f'Ontology concept/field mentions receive weight {args.entity_weight:g}; other tokens receive weight 1. Matching is lexical and does not infer entity values. See results.json for ontology provenance.', '',
              '| Rank | Saved model label | Consensus / 100 |', '|---:|---|---:|']
     for row in result['ranking']:
         lines.append(f"| {row['rank']} | {row['model'].replace('|', '/')} | {row['consensus_score']:.2f} |")

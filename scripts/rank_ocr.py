@@ -15,10 +15,12 @@ FAMILY = {'mistral':'mistral', 'mineru':'mineru', 'openai-6':'tesseract', 'fable
 
 
 def calculate(rows, overlap_weight=1.0, family_adjusted=False):
+    if any('ontology_weighted_overlap' not in row for row in rows):
+        raise ValueError('Saved metrics predate ontology weighting; rerun scripts/evaluate_outputs.py first.')
     by_page = collections.defaultdict(dict)
     for r in rows:
         by_page[r['document'],r['page']][frozenset((r['left'],r['right']))] = (
-            overlap_weight*r['token_overlap']+(1-overlap_weight)*r['sequence_similarity'])
+            overlap_weight*r['ontology_weighted_overlap']+(1-overlap_weight)*r['sequence_similarity'])
     result = collections.defaultdict(lambda: collections.defaultdict(list))
     for (doc,page),pairs in sorted(by_page.items()):
         if len(pairs)!=6:
@@ -52,9 +54,9 @@ def main():
     score=aggregate(primary)
     per_doc={d:{e:statistics.mean(v[e]) for e in ENGINES} for d,v in primary.items()}
     variants={
-        'Primary: equal documents, token-count overlap only':score,
+        'Primary: equal documents, ontology-weighted overlap':score,
         'Equal pages instead of equal documents':aggregate(primary,True),
-        'Legacy 50/50 overlap/sequence blend, equal documents':aggregate(calculate(rows,0.5)),
+        '50/50 ontology overlap/sequence blend, equal documents':aggregate(calculate(rows,0.5)),
         'Sequence only, equal documents':aggregate(calculate(rows,0)),
         'Exclude same-family peers; equal peer-family weight':aggregate(calculate(rows,family_adjusted=True)),
     }
@@ -77,7 +79,7 @@ def main():
                      'page_resample_95_percentile_range':[100*values[49],100*values[1949]]})
     result={'algorithm':'Equal-document weighted consensus centrality',
             'algorithm_version':ALGORITHM_VERSION,
-            'pair_score':'token-count overlap only; sequence is a sensitivity diagnostic',
+            'pair_score':'ontology-weighted overlap; sequence is a sensitivity diagnostic',
             'aggregation':'Mean of three peers per page, mean pages per document, mean of three documents',
             'meaning':'Similarity to peer outputs, not correctness or OCR accuracy',
             'ranking':rank,'per_document_scores':per_doc,'sensitivity_scores':variants,
@@ -87,7 +89,7 @@ def main():
     lines=['# Text-consensus ranking', '',
            f'**{ordered(score)[0]} ranks first under the primary consensus algorithm below.** This is the best consensus match among the four saved text outputs, not a demonstrated accuracy winner. No source transcription is treated as ground truth.', '',
            '## Algorithm', '',
-           'For each of the 48 pages, compare token-count overlap for every pair. A method’s page score is its mean agreement with the other three methods. Average its page scores within each document, then average the three document scores equally. Multiply by 100 for display. Reading order does not affect the primary score.', '',
+           'For each of the 48 pages, compare ontology-weighted overlap for every pair (3× weight for ontology concept/field mentions, 1× for other tokens). A method’s page score is its mean agreement with the other three methods. Average its page scores within each document, then average the three document scores equally. Multiply by 100 for display. Moving intact phrases does not affect the primary score; breaking a phrase can change ontology matching.', '',
            'Equal document weighting gives the 4-page board resolution, 14-page agreement and 30-page trade document the same influence. Signed numbers, decimal separators and percentages are preserved. Sequence scoring is shown only in sensitivity variants. Identical token counts may hide incorrect word associations. Structure, field schemas, table formatting, speed and cost are excluded.', '',
            '| Rank | Saved method | Consensus score / 100 | First in page resamples |',
            '|---:|---|---:|---:|']

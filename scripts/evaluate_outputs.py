@@ -13,8 +13,10 @@ from pathlib import Path
 from html.parser import HTMLParser
 if __package__:
     from .ocr_common import ROOT, write_json
+    from .ontology_metrics import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, ontology_metrics, load_ontology
 else:
     from ocr_common import ROOT, write_json
+    from ontology_metrics import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, ontology_metrics, load_ontology
 
 ENGINES = ['mistral', 'openai-6', 'fable-5-1', 'mineru']
 DOCS = {'csa': '1000759706 SSGA - SCB - CSA - EXECUTED - ANON (CLEAN)',
@@ -24,7 +26,7 @@ OUT = ROOT / 'output' / 'performance'
 # Parse only known formatting tags; preserve OCR placeholders such as <REDACTED>.
 FORMATTING_TAGS = set("p div span br hr table thead tbody tfoot tr td th caption h1 h2 h3 h4 h5 h6 b strong i em u s del sup sub ul ol li pre code blockquote a img html body section article".split())
 INLINE_TAGS = set('span b strong i em u s del sup sub code a'.split())
-ALGORITHM_VERSION = '3.1'
+ALGORITHM_VERSION = '4.0'
 
 class Plain(HTMLParser):
     def __init__(self):
@@ -164,7 +166,8 @@ def load(normalize=True):
                              'page_count':len(page_list)})
     return data,manifest
 
-def compare_page(doc, index, a, b, left, right):
+def compare_page(doc, index, a, b, left, right, ontology_path=DEFAULT_ONTOLOGY,
+                 entity_weight=DEFAULT_ENTITY_WEIGHT):
     x, y = tokens(left), tokens(right)
     cx, cy = collections.Counter(x), collections.Counter(y)
     overlap = sum((cx & cy).values())
@@ -180,7 +183,8 @@ def compare_page(doc, index, a, b, left, right):
                             'left_context': ' '.join(x[max(0,i-5):min(len(x),j+5)]),
                             'right_context': ' '.join(y[max(0,k-5):min(len(y),l+5)])})
     nx, ny = numeric_counts(left), numeric_counts(right)
-    return {'document':doc, 'page':index, 'left':a, 'right':b,
+    return {**ontology_metrics(x, y, ontology_path, entity_weight),
+            'document':doc, 'page':index, 'left':a, 'right':b,
             'left_tokens':len(x), 'right_tokens':len(y), 'shared_token_occurrences':overlap,
             'token_overlap':2*overlap/denom if denom else 0,
             'sequence_similarity':(forward.ratio()+reverse.ratio())/2 if denom else 0,
@@ -193,6 +197,9 @@ def compare_page(doc, index, a, b, left, right):
 def main():
     OUT.mkdir(parents=True,exist_ok=True)
     data,manifest=load()
+    _, ontology_metadata = load_ontology()
+    write_json(OUT/'metric_settings.json', {'algorithm_version': ALGORITHM_VERSION,
+               'ontology': ontology_metadata, 'entity_weight': DEFAULT_ENTITY_WEIGHT})
     write_json(OUT/'normalized_pages.json',data)
     write_json(OUT/'provenance.json',manifest)
     metrics=[]; comparisons=[]; page_metrics=[]
@@ -219,15 +226,17 @@ def main():
             denom=sum(r['left_tokens']+r['right_tokens'] for r in selected)
             summaries.append({'document':doc,'left':a,'right':b,'pages':len(selected),
                               'token_overlap':2*sum(r['shared_token_occurrences'] for r in selected)/denom if denom else 1,
+                              'ontology_weighted_overlap':2*sum(r['ontology_weighted_shared'] for r in selected)/sum(r['ontology_weighted_total'] for r in selected) if sum(r['ontology_weighted_total'] for r in selected) else 0,
                               'mean_page_sequence_similarity':statistics.mean(r['sequence_similarity'] for r in selected)})
     review_pages=[]
     for doc in DOCS:
         for page in range(1,len(data[doc][ENGINES[0]]['pages'])+1):
             pairs=[r for r in comparisons if r['document']==doc and r['page']==page]
             review_pages.append({'document':doc,'page':page,
+                                 'mean_ontology_weighted_overlap':statistics.mean(r['ontology_weighted_overlap'] for r in pairs),
                                  'mean_pairwise_overlap':statistics.mean(r['token_overlap'] for r in pairs),
                                  'mean_pairwise_sequence_similarity':statistics.mean(r['sequence_similarity'] for r in pairs)})
-    review_pages.sort(key=lambda r:r['mean_pairwise_overlap'])
+    review_pages.sort(key=lambda r:r['mean_ontology_weighted_overlap'])
     write_json(OUT/'metrics.json',metrics)
     write_json(OUT/'page_metrics.json',page_metrics)
     write_json(OUT/'agreement.json',[{k:v for k,v in r.items() if k!='changes'} for r in comparisons])
@@ -254,6 +263,12 @@ def write_report(metrics,summaries,review_pages,data):
            '|---|---:|---:|']
     for r in summaries:
         if r['document']=='all':lines.append(f"| {r['left']} ↔ {r['right']} | {r['token_overlap']:.1%} | {r['mean_page_sequence_similarity']:.1%} |")
+    lines += ['', '### Ontology-weighted agreement', '',
+              'Ontology concept and field mentions receive weight 3; other tokens weight 1. Matching uses longest nonoverlapping lexical phrases, including CamelCase and spaced names. Values are not inferred. Unweighted overlap remains available for comparison.', '',
+              '| Pair | Ontology-weighted overlap |', '|---|---:|']
+    for r in summaries:
+        if r['document'] == 'all':
+            lines.append(f"| {r['left']} ↔ {r['right']} | {r['ontology_weighted_overlap']:.1%} |")
     lines += ['', 'Agreement can reflect shared errors, shared preprocessing or manual editing. It should not be used as an accuracy ranking.', '', '### Token overlap by document', '', '| Pair | Agreement PDF | Board resolution | Trade PDF |','|---|---:|---:|---:|']
     for a,b in itertools.combinations(ENGINES,2):
         values=[next(r['token_overlap'] for r in summaries if r['document']==d and r['left']==a and r['right']==b) for d in DOCS]
@@ -267,8 +282,8 @@ def write_report(metrics,summaries,review_pages,data):
               '- **Trade page 1:** Mistral and MinerU say `1st Time Scan`; openai-6 and Fable raw text say `ist Time Scan`.',
               '- **Trade page 18:** Mistral starts with `2816128`; MinerU starts with `2:5/6/28`. openai-6 contains `HEGOTIATED BY` and `STANDARD CHARTERED pany`; Fable raw text contains fragments such as `CLAN Cuda Tp`. The outputs diverge substantially; none is designated ground truth.',
               '- **Board account-number passages:** the saved texts differ on some leading digits. The numeric-string differences in the JSON and page view preserve leading zeroes instead of treating identifiers as numbers or reconciling them across pages.',
-              '', '## Pages with greatest disagreement', '', 'Sorted by the mean token overlap across all six pairs on each page. This is a review queue, not a list of proven errors. A short page can produce a low score from only a few differing tokens.', '', '| Document | Page | Mean pairwise token overlap |','|---|---:|---:|']
-    for r in review_pages[:12]:lines.append(f"| {r['document']} | {r['page']} | {r['mean_pairwise_overlap']:.1%} |")
+              '', '## Pages with greatest disagreement', '', 'Sorted by the mean ontology-weighted overlap across all six pairs on each page. This is a review queue, not a list of proven errors. A short page can produce a low score from only a few differing tokens.', '', '| Document | Page | Mean ontology-weighted overlap |','|---|---:|---:|']
+    for r in review_pages[:12]:lines.append(f"| {r['document']} | {r['page']} | {r['mean_ontology_weighted_overlap']:.1%} |")
     lines += ['', '## Interpretation limits', '',
               '- `openai-6` and `fable-5-1` are folder labels. Their metadata identifies Tesseract plus visual review, so this is not a verified GPT-6-versus-Fable inference benchmark.',
               '- Fable’s reviewed fields are excluded, but selective corrections already present in openai-6 page text remain. The saved workflows are not controlled, identical experiments.',

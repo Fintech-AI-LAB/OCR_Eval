@@ -44,7 +44,7 @@ class EvaluationTests(unittest.TestCase):
     def test_primary_ranking_ignores_order_but_keeps_diagnostics(self):
         result, pairs, _, _ = evaluate(self.data('a b c', 'c a b', 'b c a'))
         self.assertEqual([r['consensus_score'] for r in result['ranking']], [100, 100, 100])
-        self.assertEqual(result['settings']['primary_metric'], 'token_count_overlap')
+        self.assertEqual(result['settings']['primary_metric'], 'ontology_weighted_token_overlap')
         self.assertTrue(all(p['primary_similarity'] == 1 for p in pairs))
         self.assertTrue(any(p['sequence_similarity'] < 1 for p in pairs))
         self.assertTrue(all(r['mean_numeric_agreement'] is None for r in result['pairwise_summary']))
