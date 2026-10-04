@@ -57,14 +57,14 @@ class OntologyTests(unittest.TestCase):
     def test_all_entry_points_use_weight_and_record_provenance(self):
         texts = ['IBAN hello', 'IBAN typo', 'typo hello']
         data = {'doc': {str(i): {'pages': [t]} for i, t in enumerate(texts)}}
-        result, pairs, _, _ = evaluate(data, ontology_path=self.path)
+        result, pairs, _, _ = evaluate(data, ontology_path=self.path, ontology_mode='mentions')
         paths = []
         for i, text in enumerate(texts):
             path = Path(self.tmp.name) / f'{i}.txt'
             path.write_text(text)
             paths.append(path)
-        detail = score_page_details(paths, ontology_path=self.path)
-        self.assertAlmostEqual(detail['score'], score_page(paths, ontology_path=self.path))
+        detail = score_page_details(paths, ontology_path=self.path, ontology_mode='mentions')
+        self.assertAlmostEqual(detail['score'], score_page(paths, ontology_path=self.path, ontology_mode='mentions'))
         batch = {r['model']: r['consensus_score'] for r in result['ranking']}
         self.assertEqual(detail['model_scores'], [batch[str(i)] for i in range(3)])
         self.assertEqual(len(result['settings']['ontology']['sha256']), 64)

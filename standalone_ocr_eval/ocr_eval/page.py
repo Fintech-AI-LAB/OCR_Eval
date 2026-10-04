@@ -1,21 +1,14 @@
 """Score agreement among OCR output files for one physical page (0–100)."""
-import argparse
 import itertools
 import json
 import math
 import statistics
 from pathlib import Path
 
-if __package__:
-    from .ontology_metrics import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, ontology_metrics, load_ontology, validate_entity_weight
-    from .field_values import extract_field_values, field_text, field_value_metrics, primary_metric, primary_overlap, validate_ontology_mode
-    from .ontology_regions import extract_ontology_regions, region_metrics, region_policy, validate_region_context, DEFAULT_REGION_CONTEXT_TOKENS
-    from .evaluate_outputs import ALGORITHM_VERSION, normalize_texts, compare_page, tokens
-else:
-    from ontology_metrics import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, ontology_metrics, load_ontology, validate_entity_weight
-    from field_values import extract_field_values, field_text, field_value_metrics, primary_metric, primary_overlap, validate_ontology_mode
-    from ontology_regions import extract_ontology_regions, region_metrics, region_policy, validate_region_context, DEFAULT_REGION_CONTEXT_TOKENS
-    from evaluate_outputs import ALGORITHM_VERSION, normalize_texts, compare_page, tokens
+from .ontology import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, ontology_metrics, load_ontology, validate_entity_weight
+from .field_values import extract_field_values, field_text, field_value_metrics, primary_metric, primary_overlap, validate_ontology_mode
+from .regions import extract_ontology_regions, region_metrics, region_policy, validate_region_context, DEFAULT_REGION_CONTEXT_TOKENS
+from .text import ALGORITHM_VERSION, normalize_texts, compare_page, tokens
 
 
 def _json_text(value):
@@ -46,8 +39,9 @@ def _json_text(value):
 
 def _json_format(value):
     if isinstance(value, dict):
-        if 'pages' in value and isinstance(value['pages'], list) and len(value['pages']) == 1:
-            return _json_format(value['pages'][0])
+        for key in ('pages', 'full_page_text'):
+            if key in value and isinstance(value[key], list) and len(value[key]) == 1:
+                return _json_format(value[key][0])
         if 'markdown' in value:
             return 'markdown'
         if any(key in value for key in ('full_page_text', 'text', 'lines')):
@@ -152,26 +146,10 @@ def score_page(file_paths, overlap_weight=1.0, *, ontology_path=DEFAULT_ONTOLOGY
                region_context_tokens=DEFAULT_REGION_CONTEXT_TOKENS):
     """Return a single 0–100 score: mean agreement across all output pairs.
 
-    With an ontology, compare text regions around its labels.
+    Supply ontology_path to compare text regions around ontology labels.
     Use ontology_mode="values" for exact field-value comparison.
     Use ontology_mode="mentions" for the legacy label-weighted token score.
     This measures consensus, not accuracy. Average scores to weight pages equally.
     Set overlap_weight explicitly below 1 to add global sequence penalties.
     """
     return statistics.mean(score_models(file_paths, overlap_weight, ontology_path=ontology_path, entity_weight=entity_weight, ontology_mode=ontology_mode, region_context_tokens=region_context_tokens))
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('files', nargs='+', type=Path)
-    parser.add_argument('--overlap-weight', type=float, default=1.0,
-                        help='Default 1: selected primary metric only. Below 1 adds global sequence scoring.')
-    parser.add_argument('--ontology', type=Path, default=DEFAULT_ONTOLOGY)
-    parser.add_argument('--ontology-mode', choices=('regions', 'values', 'mentions'), default='regions')
-    parser.add_argument('--region-context-tokens', type=int, default=DEFAULT_REGION_CONTEXT_TOKENS)
-    parser.add_argument('--entity-weight', type=float, default=DEFAULT_ENTITY_WEIGHT)
-    args = parser.parse_args()
-    try:
-        print(score_page(args.files, args.overlap_weight, ontology_path=args.ontology, entity_weight=args.entity_weight, ontology_mode=args.ontology_mode, region_context_tokens=args.region_context_tokens))
-    except (ValueError, OSError, KeyError, TypeError) as error:
-        parser.error(str(error))

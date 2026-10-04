@@ -8,6 +8,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.score_page import score_page, score_models, score_page_details
 
 
+# These regressions exercise the legacy text/mention scoring contract.
+from functools import partial
+score_page = partial(score_page, ontology_mode='mentions')
+score_models = partial(score_models, ontology_mode='mentions')
+score_page_details = partial(score_page_details, ontology_mode='mentions')
+
+
 class PageScoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

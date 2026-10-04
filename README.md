@@ -1,5 +1,9 @@
 # OCR evaluation
 
+## Standalone Python library
+
+See [standalone_ocr_eval/README.md](standalone_ocr_eval/README.md) for installation, API, CLI, input schema, and optional ontology instructions.
+
 ## DeepSeek OCR 2 (local Apple Silicon)
 
 ```bash
@@ -164,14 +168,16 @@ multi-page JSON is rejected. PDF/image files are not OCR text inputs.
 At least two files are required; at least three are needed to distinguish
 method rankings. All outputs without word/number tokens raise `ValueError`;
 exclude such pages explicitly rather than treating them as perfect agreement.
-The score measures consensus, not accuracy. Version 4 uses ontology-weighted
-overlap by default (`overlap_weight=1.0`), so moving intact phrases does not lower the
-primary score. Omissions, extra repetitions and numeric changes still count.
+The score measures consensus, not accuracy. Version 6 compares whole text regions
+around ontology labels by default (`overlap_weight=1.0`). Changed regional text,
+numbers and local word order reduce agreement; unmatched regions receive zero.
+Pages without ontology anchors are excluded from batch scoring; single-page
+scoring raises an error. Localization coverage is reported separately.
 For diagnostics, `score_page_details(paths)` returns `score`, `model_scores`
 (in input order), and `pairs` with separate token, sequence and numeric agreement.
 Pair similarities are 0–1; the page and method scores are 0–100. Sequence and
 numeric diagnostics have no additional weight in the default primary score.
-Explicitly setting `overlap_weight=0.5` opts into a 50/50 weighted-overlap/sequence blend.
+Explicitly setting `overlap_weight=0.5` opts into a 50/50 region/sequence blend.
 
 Version 3.1 preserves accounting parentheses as written: `(100.00)` differs
 from `100.00` without assuming every parenthesized number is negative. Numeric
@@ -180,8 +186,8 @@ agreement now counts occurrences, so missing a repeated amount lowers it;
 the missing or extra occurrences. Inline HTML emphasis does not split words,
 while block elements and table cells remain separated.
 
-The default `score_page()` and `score_models()` use a phrase-and-counter path, avoiding
-sequence alignment and full difference generation. Request
+The default `score_page()` and `score_models()` compare ontology regions, avoiding
+global sequence alignment and full difference generation. Request
 `score_page_details()` when those diagnostics are needed. Explicit sequence
 weighting still requires alignment.
 
@@ -217,9 +223,9 @@ For multiple runs, supply exact page paths to `score_page()` or prepare a custom
 `--input` JSON from the chosen run. Selected raw OCR artifact hashes are saved
 in the provenance metadata.
 
-The ranking measures **consensus, not accuracy**: each pair uses ontology-weighted
-overlap, with ontology concept/field mentions weighted 3× (see the formula below). Sequence and numeric agreement are reported
-separately. Identical token counts can score 100 even if word associations differ.
+The ranking measures **consensus, not accuracy**: each pair compares whole
+text regions located by ontology labels. Token,
+label-weighted, sequence and numeric agreement remain separate diagnostics.
 Each method's score averages its agreement with the other methods on each page,
 then averages pages within each document and gives each document equal weight.
 Formatting is removed before comparison; layout and structure are not scored.
@@ -231,7 +237,8 @@ Options include `--weighting page`,
 `--documents csa board trade`, `--models mistral openai-6 mineru`, and
 `--output output/custom_evaluation`.
 Use `--overlap-weight 0.7` only to explicitly opt into a 70/30 overlap/sequence
-blend; the default 1.0 ignores global order while matching contiguous ontology phrases.
+blend; the default 1.0 compares regions. Region alignment allows passages to move;
+ordered bigrams retain sensitivity to local word and number order.
 
 To evaluate other saved text, provide `--input path/to/pages.json` using this
 schema (at least three methods are required):
@@ -273,38 +280,134 @@ conda run --no-capture-output -n myenv3.13 python -m unittest discover -s tests 
 References: [Mistral OCR](https://docs.mistral.ai/studio/document-processing/basic_ocr),
 [MinerU model](https://huggingface.co/opendatalab/MinerU2.5-Pro-2604-1.2B).
 
-## Ontology weighting (algorithm 4.0)
+## Ontology region evaluation (algorithm 6.1)
 
-The default evaluation now gives mentions of concepts and fields in
-`document_ontology.json` **3× weight**, versus 1× for ordinary tokens. Page scoring,
-cross-model evaluation, and the five/six-model comparisons use the same metric.
-Regenerate saved metrics before running `rank_ocr.py`; old results are not migrated.
+With an ontology, the default primary score compares **whole text regions** rather
+than extracted field values. Repository scripts use `document_ontology.json`;
+the standalone library requires `ontology_path` / `--ontology` and otherwise
+uses ordinary token overlap.
 
-Matching uses case-insensitive whole-token phrases, including CamelCase and spaced
-names (`SettlementDate` / `Settlement Date`). Longest nonoverlapping matches prevent
-nested concepts and duplicate ontology entries from multiplying the weight.
-Definitions, evidence, and metadata are not interpreted as instructions or terms.
-This is lexical mention matching, not named-entity recognition: unlabeled values,
-synonyms, and misspelled labels are not inferred. Reordering intact phrases is free;
-breaking a phrase can change its classification. Entity values such as account
-numbers retain ordinary weight unless they themselves match the vocabulary.
+1. Match ontology concept names, children, fields and declared aliases. CamelCase
+   and spaced forms share canonical anchor tags. Suppress common function-word
+   labels such as `To` and labels shorter than three characters.
+2. Select a window of 16 tokens before and after each anchor. Keep boundaries
+   relative to that anchor; there are no fixed-size document chunks. Divide each
+   token's weight equally among its covering windows, and each bigram's weight
+   among windows containing both tokens. Overlap never duplicates selected mass.
+3. Align windows one-to-one by maximum weighted agreement within the same central
+   canonical anchor tag. For anchors with ambiguous owners, require identical
+   window tokens, a shared unambiguous neighbouring anchor, or at least two shared
+   context words with word Dice of at least 0.5. Context words exclude anchors,
+   numbers, common function words and words shorter than three characters.
+   Repeated regions cannot reuse a peer region. A generic shared label alone
+   cannot connect unrelated passages.
+4. Score each matched region using `0.5 * token Dice + 0.5 * ordered bigram Dice`,
+   applying the overlap weights to repeated occurrences. Weight matches by their combined token mass;
+   divide matched mass by all selected token mass. Unmatched regions receive zero.
 
-Let T be total token occurrences across a pair, S their shared count, E the total
-number of tokens covered by matched phrases, and M the shared phrase count weighted
-by phrase length. Shared counts use the minimum occurrence count on either side.
-The weighted overlap is `2 * (S + (w - 1) * M) / (T + (w - 1) * E)`.
-For `IBAN hello` versus `typo hello`, the weighted score is 33.33%; changing the
-ordinary word instead (`IBAN typo`) gives 75%. Both unweighted scores are 50%.
+Every word and numeric token within a region contributes. Signs, separators,
+percentages and leading zeroes remain meaningful. Dates and numbers are not typed
+or normalized as exact values. Labels are canonicalized to one anchor token;
+other punctuation is ignored. Matching labels alone can still agree even when no
+value is present: this measures selected-text consensus, not field completeness.
+
+`ontology_region_agreement` is the primary metric. `ontology_anchor_agreement`
+compares anchor occurrences separately. Per-output `localization` reports anchor
+counts, ambiguous anchors, region counts, selected/total tokens and the selected
+fraction. The pair diagnostics include region passages, source character/line
+boundaries, anchors, overlap weights, match details and unmatched regions. Rejected
+context candidates are counted, with up to 20 examples per pair. Ambiguous owners
+do not incur an automatic penalty; they require evidence for correspondence.
+Exact field extraction is not called. Algorithm 6.0 scores must be regenerated.
 
 ```bash
-conda run --no-capture-output -n myenv3.13 python scripts/score_page.py a.md b.md --entity-weight 3
-conda run --no-capture-output -n myenv3.13 python scripts/cross_model_eval.py --input aligned.json --ontology document_ontology.json --entity-weight 3
+conda run --no-capture-output -n myenv3.13 python scripts/score_page.py a.md b.md --ontology-mode regions --region-context-tokens 16
+conda run --no-capture-output -n myenv3.13 python scripts/cross_model_eval.py --input aligned.json --ontology document_ontology.json --region-context-tokens 16
 ```
 
-Python APIs accept `ontology_path=...` and `entity_weight=...`. Weight must be finite
-and at least 1; **weight 1 reproduces unweighted overlap**. The ontology must exist
-and be valid; it is never silently skipped. Detailed results record its SHA-256,
-matching policy, and weight. Diagnostics include `ontology_weighted_overlap`,
-`ontology_entity_agreement` (null when neither text has mentions), matched/unmatched
-phrase counts, and the original `token_overlap`. Scores remain consensus rather
-than accuracy against ground truth.
+Python APIs accept `region_context_tokens=16` (integer 1–128). Larger contexts
+include more neighbouring text; smaller contexts can miss a value. Pages with no
+located regions across all peers are excluded and reported; entirely unscorable
+inputs raise an error. A peer without regions receives zero when others have
+regions. No token-score fallback inflates region agreement. Inspect coverage:
+misspelled/undeclared labels may prevent localization, and dense ontologies can
+select much of a page. Anchor consensus cannot establish ontology quality without
+reviewed reference annotations.
+
+These are **text regions**. Spatial bounding boxes, image coordinates and exact
+field correctness are not evaluated. Regenerate saved metrics before ranking;
+old field-value or label scores are rejected by the region ranking script.
+
+## Optional exact field-value evaluation
+
+Select `ontology_mode="values"` / `--ontology-mode values` to retain the previous
+exact field-value algorithm. This mode uses the following extraction policy.
+
+Extraction uses explicit `Label: value` / `Label = value` pairs, typed values after
+a label (`Amount 100`), adjacent label/value lines, and Markdown/HTML/tab-separated
+tables. CamelCase, spaced names and declared aliases map to one canonical field.
+Shared field names retain their owning concept when a section heading supplies
+context; ambiguous owners are reported without match credit. Unlabelled values,
+misspelled labels and undeclared synonyms are not inferred.
+
+Each extracted record contains the canonical field, record key, occurrence,
+raw/normalized value, value type, validity, source line and source text. Stable
+unlabelled first-column table keys identify records; otherwise repeated fields
+use occurrence order. Swapping `Amount 100 Account 200` to `Amount 200 Account 100`
+scores 0%, even though the token counts match. `Amount 100` versus `Amount 900`
+also scores 0%. Amount/currency associations are preserved within row/scope and
+occurrence. Reordering rows without stable keys can reduce agreement.
+
+`ontology_field_value_agreement = 2 * matching_valid_records / total_records`
+
+All extracted occurrences count equally. Missing and extra fields lower the
+score; invalid values and extraction issues add to the denominator and receive
+no match credit. Two outputs with no fields have `null` field agreement and
+receive zero in a page where another output has fields. Batch pages with no field
+evidence are excluded; an entirely unscorable batch or single page raises an error.
+No token-overlap fallback inflates field-value agreement.
+
+Types are inferred from common field names and can be overridden:
+
+```json
+{
+  "date_order": "dmy",
+  "concepts": {
+    "Invoice": {
+      "value_type": "identifier",
+      "fields": ["Total", "AccountNumber", "SettlementDate", "Currency"],
+      "field_types": {"Total": "amount", "AccountNumber": "identifier"}
+    },
+    "Company": {"aliases": ["Business Name"], "value_type": "text"}
+  }
+}
+```
+
+Supported types are `text`, `identifier`, `number`, `amount`, `date`, and `currency`.
+Identifiers preserve leading zeroes and case; standard IBAN/BBAN/BIC/ISIN/LEI/UETR
+labels additionally normalize spaces and letter case. Numbers use exact Decimal
+comparison, dot decimals and correctly grouped thousands commas. Signs,
+accounting negatives, percentages and currencies remain meaningful. Dates support
+ISO dates, English month names and unambiguous day/month forms; ambiguous dates
+require `date_order: "dmy"` or `"mdy"` globally or on the owning concept. Text
+comparison normalizes whitespace, Unicode and case. This does not validate bank
+identifiers, currency membership or correctness against the source document.
+
+```bash
+conda run --no-capture-output -n myenv3.13 python scripts/score_page.py a.md b.md --ontology-mode values
+conda run --no-capture-output -n myenv3.13 python scripts/cross_model_eval.py --input aligned.json --ontology document_ontology.json --ontology-mode values
+# Explicit legacy label-weighted scoring:
+conda run --no-capture-output -n myenv3.13 python scripts/score_page.py a.md b.md --ontology-mode mentions --entity-weight 3
+```
+
+The Python APIs accept `ontology_mode="regions"` (default), `"values"` or `"mentions"`.
+`entity_weight` affects only mentions mode and must be finite and at least 1;
+weight 1 reproduces unweighted overlap in that mode. Legacy token and label scores
+remain available in diagnostics. Ontology SHA-256 and scoring settings are saved.
+Field diagnostics include `per_field_agreement`, matched counts, unmatched records,
+invalid-value reasons and ambiguous-label/column-count issues.
+
+Scores from these modes must not be mixed or interpreted as region scores. Consensus still requires independent reviewed
+reference values before it can be interpreted as accuracy. Extraction coverage
+is limited to supported labels and structures; inspect issues and extracted values
+when applying the full ontology to a new document family.

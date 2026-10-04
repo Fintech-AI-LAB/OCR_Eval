@@ -15,12 +15,12 @@ FAMILY = {'mistral':'mistral', 'mineru':'mineru', 'openai-6':'tesseract', 'fable
 
 
 def calculate(rows, overlap_weight=1.0, family_adjusted=False):
-    if any('ontology_weighted_overlap' not in row for row in rows):
-        raise ValueError('Saved metrics predate ontology weighting; rerun scripts/evaluate_outputs.py first.')
+    if any('ontology_region_agreement' not in row or row.get('algorithm_version') != ALGORITHM_VERSION or row.get('ontology_mode') != 'regions' for row in rows):
+        raise ValueError('Saved metrics do not identify the current ontology region evaluation; rerun scripts/evaluate_outputs.py first.')
     by_page = collections.defaultdict(dict)
     for r in rows:
         by_page[r['document'],r['page']][frozenset((r['left'],r['right']))] = (
-            overlap_weight*r['ontology_weighted_overlap']+(1-overlap_weight)*r['sequence_similarity'])
+            overlap_weight*(r['ontology_region_agreement'] or 0)+(1-overlap_weight)*r['sequence_similarity'])
     result = collections.defaultdict(lambda: collections.defaultdict(list))
     for (doc,page),pairs in sorted(by_page.items()):
         if len(pairs)!=6:
@@ -35,6 +35,8 @@ def calculate(rows, overlap_weight=1.0, family_adjusted=False):
             else:
                 score=statistics.mean(pairs[frozenset((engine,peer))] for peer in ENGINES if peer!=engine)
             result[doc][engine].append(score)
+    if not result:
+        raise ValueError('No scored ontology region pages; regenerate the evaluation.')
     return dict(result)
 
 
@@ -54,9 +56,9 @@ def main():
     score=aggregate(primary)
     per_doc={d:{e:statistics.mean(v[e]) for e in ENGINES} for d,v in primary.items()}
     variants={
-        'Primary: equal documents, ontology-weighted overlap':score,
+        'Primary: equal documents, ontology region agreement':score,
         'Equal pages instead of equal documents':aggregate(primary,True),
-        '50/50 ontology overlap/sequence blend, equal documents':aggregate(calculate(rows,0.5)),
+        '50/50 region/sequence blend, equal documents':aggregate(calculate(rows,0.5)),
         'Sequence only, equal documents':aggregate(calculate(rows,0)),
         'Exclude same-family peers; equal peer-family weight':aggregate(calculate(rows,family_adjusted=True)),
     }
@@ -79,7 +81,7 @@ def main():
                      'page_resample_95_percentile_range':[100*values[49],100*values[1949]]})
     result={'algorithm':'Equal-document weighted consensus centrality',
             'algorithm_version':ALGORITHM_VERSION,
-            'pair_score':'ontology-weighted overlap; sequence is a sensitivity diagnostic',
+            'pair_score':'ontology region agreement; sequence is a sensitivity diagnostic',
             'aggregation':'Mean of three peers per page, mean pages per document, mean of three documents',
             'meaning':'Similarity to peer outputs, not correctness or OCR accuracy',
             'ranking':rank,'per_document_scores':per_doc,'sensitivity_scores':variants,
@@ -89,14 +91,14 @@ def main():
     lines=['# Text-consensus ranking', '',
            f'**{ordered(score)[0]} ranks first under the primary consensus algorithm below.** This is the best consensus match among the four saved text outputs, not a demonstrated accuracy winner. No source transcription is treated as ground truth.', '',
            '## Algorithm', '',
-           'For each of the 48 pages, compare ontology-weighted overlap for every pair (3× weight for ontology concept/field mentions, 1× for other tokens). A method’s page score is its mean agreement with the other three methods. Average its page scores within each document, then average the three document scores equally. Multiply by 100 for display. Moving intact phrases does not affect the primary score; breaking a phrase can change ontology matching.', '',
-           'Equal document weighting gives the 4-page board resolution, 14-page agreement and 30-page trade document the same influence. Signed numbers, decimal separators and percentages are preserved. Sequence scoring is shown only in sensitivity variants. Identical token counts may hide incorrect word associations. Structure, field schemas, table formatting, speed and cost are excluded.', '',
+           'For each page with ontology anchors, compare whole text regions for every pair. Pages without anchors are excluded by the evaluator. A method’s page score is its mean agreement with the other three methods. Average its page scores within each document, then average the three document scores equally. Multiply by 100 for display. Anchor-relative windows share overlapping token and bigram weight; matched content uses equal weighted token and ordered-bigram agreement. Correspondence requires the same central anchor tag and context for ambiguous labels. Unmatched regions receive zero.', '',
+           'Equal document weighting gives the 4-page board resolution, 14-page agreement and 30-page trade document the same influence. Signed numbers, decimal separators and percentages are preserved. Sequence scoring is shown only in sensitivity variants. Numbers retain signs, separators and leading zeroes. Exact field values and types are not inferred. Ontology anchor agreement and localization coverage are separate diagnostics. Layout, speed and cost are excluded.', '',
            '| Rank | Saved method | Consensus score / 100 | First in page resamples |',
            '|---:|---|---:|---:|']
     for r in rank:lines.append(f"| {r['rank']} | {r['method']} | {r['consensus_score']:.2f} | {r['page_resample_first_share']:.1%} |")
     lines += ['', 'The resampling column uses 2,000 paired page resamples within each document. It measures ranking stability for these documents only, not a probability that a method is correct. Pages and documents may be correlated; three documents are insufficient for broad generalization.', '',
               '## By document', '', '| Method | Agreement | Board resolution | Trade |','|---|---:|---:|---:|']
-    for e in ordered(score):lines.append(f'| {e} | '+' | '.join(f'{100*per_doc[d][e]:.2f}' for d in ['csa','board','trade'])+' |')
+    for e in ordered(score):lines.append(f'| {e} | '+' | '.join(f'{100*per_doc[d][e]:.2f}' if d in per_doc else 'n/a' for d in ['csa','board','trade'])+' |')
     lines += ['', '## Sensitivity checks', '', '| Scoring variant | Ranking, highest first |','|---|---|']
     for label,v in variants.items():lines.append('| '+label+' | '+' > '.join(f'{e} ({100*v[e]:.2f})' for e in ordered(v))+' |')
     lines += ['', 'The family-adjusted variant excludes a candidate’s same-family peer and gives each remaining OCR family equal weight. For example, Mistral compares equally with MinerU and the average of the two Tesseract-labeled outputs. This reduces duplicate voting but is not a statistical correction for all shared errors.', '',

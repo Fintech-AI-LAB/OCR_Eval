@@ -1,0 +1,9 @@
+{
+  "concepts": {
+    "Invoice": {
+      "value_type": "identifier",
+      "fields": ["IBAN", "Total"],
+      "field_types": {"IBAN": "identifier", "Total": "amount"}
+    }
+  }
+}

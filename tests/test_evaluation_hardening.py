@@ -11,6 +11,14 @@ from evaluate_outputs import normalize_texts, compare_page, one_match
 from score_page import score_page, score_models, score_page_details
 
 
+# These regressions exercise the legacy text/mention scoring contract.
+from functools import partial
+evaluate = partial(evaluate, ontology_mode='mentions')
+score_page = partial(score_page, ontology_mode='mentions')
+score_models = partial(score_models, ontology_mode='mentions')
+score_page_details = partial(score_page_details, ontology_mode='mentions')
+
+
 class EvaluationHardeningTests(unittest.TestCase):
     def test_normalized_json_roundtrip_preserves_literal_markup_and_scores(self):
         data = {'d': {

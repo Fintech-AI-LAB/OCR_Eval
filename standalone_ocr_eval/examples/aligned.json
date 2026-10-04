@@ -1,0 +1,7 @@
+{
+  "invoice": {
+    "engine_a": {"pages": ["Invoice 00123 IBAN GB82 WEST Total USD 100.00"], "input_format": "plain"},
+    "engine_b": {"pages": ["Invoice 00123 IBAN GB82 WEST Total USD 100.00"], "input_format": "plain"},
+    "engine_c": {"pages": ["Invoice 00123 IBAN GB82 WEST Total USD 10.00"], "input_format": "plain"}
+  }
+}

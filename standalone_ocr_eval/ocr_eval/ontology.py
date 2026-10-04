@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import unicodedata
 
-DEFAULT_ONTOLOGY = Path(__file__).resolve().parents[1] / 'document_ontology.json'
+DEFAULT_ONTOLOGY = None
 DEFAULT_ENTITY_WEIGHT = 3.0
 
 
@@ -57,6 +57,7 @@ def _load(path, mtime_ns, size):
 
 
 def load_ontology(path=DEFAULT_ONTOLOGY):
+    """Load an optional user-supplied ontology; None uses ordinary token overlap."""
     if path is None:
         return {}, None
     path = Path(path).resolve()

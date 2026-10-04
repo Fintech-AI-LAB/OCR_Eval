@@ -1,21 +1,14 @@
-#!/usr/bin/env python3
 """Evaluate page-aligned OCR text without ground truth; uses only the standard library."""
-import argparse
-import csv
-import hashlib
 import itertools
-import json
 import math
 import statistics
-from pathlib import Path
 
-from evaluate_outputs import ALGORITHM_VERSION, normalize_texts, tokens, compare_page, load
-from ocr_common import ROOT, write_json
-from ontology_metrics import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, load_ontology, validate_entity_weight
+from .text import ALGORITHM_VERSION, normalize_texts, tokens, compare_page
+from .ontology import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, load_ontology, validate_entity_weight
 
-from field_values import extract_field_values, field_text, primary_metric, primary_overlap, validate_ontology_mode
+from .field_values import extract_field_values, field_text, primary_metric, primary_overlap, validate_ontology_mode
 
-from ontology_regions import extract_ontology_regions, region_policy, validate_region_context, DEFAULT_REGION_CONTEXT_TOKENS
+from .regions import extract_ontology_regions, region_policy, validate_region_context, DEFAULT_REGION_CONTEXT_TOKENS
 
 
 def validate(data):
@@ -148,66 +141,3 @@ def evaluate(data, overlap_weight=1.0, weighting='document', ontology_path=DEFAU
             'models': models, 'documents': list(normalized), 'ranking': rank(overall),
             'per_document_rankings': {d: rank(v) for d, v in doc_scores.items()},
             'localization': localizations, 'excluded_pages': excluded, 'pairwise_summary': summary}, comparisons, volumes, normalized
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--input', type=Path, help='JSON: document -> model -> {pages: [text, ...]}; default reads repository OCR artifacts')
-    parser.add_argument('--models', nargs='+', help='Evaluate only these model labels')
-    parser.add_argument('--documents', nargs='+', help='Evaluate only these document IDs')
-    parser.add_argument('--overlap-weight', type=float, default=1.0,
-                        help='Default 1: selected primary metric only. Below 1 adds global sequence scoring.')
-    parser.add_argument('--weighting', choices=['document', 'page'], default='document')
-    parser.add_argument('--output', type=Path, default=ROOT / 'output' / 'cross_model')
-    parser.add_argument('--ontology', type=Path, default=DEFAULT_ONTOLOGY)
-    parser.add_argument('--ontology-mode', choices=('regions', 'values', 'mentions'), default='regions')
-    parser.add_argument('--region-context-tokens', type=int, default=DEFAULT_REGION_CONTEXT_TOKENS)
-    parser.add_argument('--entity-weight', type=float, default=DEFAULT_ENTITY_WEIGHT,
-                        help='Label weight in mentions mode; unused by region and field-value scoring.')
-    args = parser.parse_args()
-    try:
-        if args.input:
-            raw = args.input.read_bytes()
-            data = json.loads(raw)
-            provenance = {'input_file': str(args.input.resolve()),
-                          'input_sha256': hashlib.sha256(raw).hexdigest()}
-        else:
-            data, provenance = load(normalize=False)
-        if args.documents:
-            if len(args.documents) != len(set(args.documents)):
-                raise ValueError('Duplicate document selection.')
-            data = {d: data[d] for d in args.documents}
-        if args.models:
-            if len(args.models) != len(set(args.models)):
-                raise ValueError('Duplicate model selection.')
-            data = {d: {m: records[m] for m in args.models} for d, records in data.items()}
-        result, pairs, volumes, normalized = evaluate(data, args.overlap_weight, args.weighting, args.ontology, args.entity_weight, args.ontology_mode, args.region_context_tokens)
-    except (ValueError, KeyError, OSError, TypeError) as error:
-        parser.error(str(error))
-    result['provenance'] = provenance
-    args.output.mkdir(parents=True, exist_ok=True)
-    for name, obj in [('results.json', result), ('page_differences.json', pairs),
-                      ('text_volume.json', volumes), ('normalized_pages.json', normalized)]:
-        write_json(args.output / name, obj)
-    with (args.output / 'ranking.csv').open('w', newline='', encoding='utf-8') as stream:
-        writer = csv.DictWriter(stream, fieldnames=['rank', 'model', 'consensus_score'])
-        writer.writeheader(); writer.writerows(result['ranking'])
-    lines = ['# Cross-model text evaluation', '',
-             f"Documents: {len(result['documents'])}; methods: {len(result['models'])}; excluded unscorable pages: {len(result['excluded_pages'])}.", '',
-             '**Scores measure consensus, not correctness.** No ground-truth model or structure score is used.', '',
-             f"Pair score = {args.overlap_weight:.2f} × the selected primary ontology metric + {1-args.overlap_weight:.2f} × symmetric sequence similarity. Average across peers, then use equal {args.weighting} weighting. Scoring ignores formatting and case, but preserves signed numbers, numeric separators, percentages and leading zeroes. Numeric agreement is reported separately. Line hyphens are joined only when another output corroborates the joined word.", '',
-             f'Ontology mode: {args.ontology_mode}. Regions mode compares entire text windows around ontology labels and reports localization coverage separately. Values mode binds canonical fields to typed values and record occurrences; ambiguous labels and invalid values are reported. Pages without field evidence are excluded. Mentions mode uses label-weighted token overlap with weight {args.entity_weight:g}. See results.json for provenance and page_differences.json for selected regions, matches and extracted values in values mode.', '',
-             '| Rank | Saved model label | Consensus / 100 |', '|---:|---|---:|']
-    for row in result['ranking']:
-        lines.append(f"| {row['rank']} | {row['model'].replace('|', '/')} | {row['consensus_score']:.2f} |")
-    lines += ['', 'Empty text is not evidence of a correct blank page. All-empty pages are excluded; two empty methods receive zero agreement when another method has text. Ties share ranks.', '',
-              'Model labels are supplied by the input. Shared errors and related OCR pipelines can inflate agreement. The repository openai-6 and fable-5-1 artifacts identify Tesseract with visual review; their labels do not verify those named models. Fable raw page text is used, not separately reviewed fields.', '',
-              'See results.json for per-document rankings, pairwise summaries and provenance; page_differences.json for differing passages and numeric strings. No original OCR files were modified and no inference calls were made.']
-    (args.output / 'report.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    for row in result['ranking']:
-        print(f"{row['rank']}. {row['model']}: {row['consensus_score']:.2f}")
-    print(f'Results: {args.output.resolve()}')
-
-
-if __name__ == '__main__':
-    main()

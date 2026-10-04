@@ -4,6 +4,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from cross_model_eval import evaluate, validate
 
+# These regressions exercise the legacy text/mention scoring contract.
+from functools import partial
+evaluate = partial(evaluate, ontology_mode='mentions')
+
+
 class EvaluationTests(unittest.TestCase):
     def data(self, *texts):
         return {'doc': {name: {'pages': [text]} for name, text in zip('abcd', texts)}}

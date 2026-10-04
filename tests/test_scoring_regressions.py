@@ -10,6 +10,12 @@ from cross_model_eval import evaluate
 from score_page import score_models
 
 
+# These regressions exercise the legacy text/mention scoring contract.
+from functools import partial
+evaluate = partial(evaluate, ontology_mode='mentions')
+score_models = partial(score_models, ontology_mode='mentions')
+
+
 class ScoringRegressionTests(unittest.TestCase):
     def test_meaningful_numbers_change_score(self):
         for a, b in [('USD -100.00', 'USD 100.00'), ('rate 5%', 'rate 5'),

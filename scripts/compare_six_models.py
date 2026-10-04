@@ -75,6 +75,8 @@ def main():
     for row in result['pairwise_summary']:
         row['documents'] = row.pop('pages')
         row['documents_with_numbers'] = row.pop('pages_with_numbers')
+        row['documents_with_regions'] = row.pop('pages_with_regions')
+        row['documents_with_field_values'] = row.pop('pages_with_field_values')
         for key in list(row):
             if key.startswith('mean_page_'):
                 row[key.replace('mean_page_', 'mean_document_')] = row.pop(key)
@@ -97,12 +99,12 @@ def main():
              '| Rank | Method | Consensus / 100 | CSA | Board | Trade |',
              '|---:|---|---:|---:|---:|---:|']
     for row in result['ranking']:
-        scores = [next(r['consensus_score'] for r in result['per_document_rankings'][d] if r['model'] == row['model'])
+        scores = [next((r['consensus_score'] for r in result['per_document_rankings'].get(d, []) if r['model'] == row['model']), None)
                   for d in ('csa', 'board', 'trade')]
         lines.append(f'| {row["rank"]} | {row["model"]} | {row["consensus_score"]:.2f} | ' +
-                     ' | '.join(f'{s:.2f}' for s in scores) + ' |')
+                     ' | '.join(f'{s:.2f}' if s is not None else 'n/a' for s in scores) + ' |')
     lines += ['', '## Method', '',
-              f'Algorithm {ALGORITHM_VERSION}: ontology-weighted overlap gives concept/field mentions weight 3 and other tokens weight 1. Matching is lexical and does not infer values. Unweighted overlap is retained as a diagnostic. Each method averages agreement with its five peers, then averages the three document scores. There are 45 document pairs. Repetitions count; moving intact phrases does not affect ranking, but breaking a phrase can change its classification.', '',
+              f'Algorithm {ALGORITHM_VERSION}: primary agreement compares all content in text regions around ontology labels. Each anchor has a window with 16 context tokens per side; overlapping token and bigram weight is shared so text counts once. One-to-one alignment requires the same central anchor tag and contextual evidence for ambiguous anchors. Token and ordered-bigram agreement are averaged and weighted by selected token mass; unmatched regions receive zero. Exact values and field owners are not inferred. Anchor agreement and selected-text coverage are separate diagnostics. Each method averages agreement with five peers, then across documents.', '',
               'Markdown/HTML formatting is decoded once. Signed numbers, numeric separators, percentages, leading zeroes and accounting parentheses are retained. Sequence and numeric agreement are separate diagnostics. No layout, speed or cost score is included.', '',
               '## Limitations', '',
               '- DeepSeek trade page 10 hit the 8192-token cap. Its saved text, including repetitions, is included; runner-added warning text is excluded. Dense trade tables also showed errors and omissions. The selected run comes from the DeepSeek manifest, not partial diagnostic runs.',

@@ -56,22 +56,23 @@ remain text tokens if present in an output.
 
 ### Primary pairwise score
 
-Ontology concept and field mentions from `document_ontology.json` receive weight 3;
-other tokens receive weight 1. Names are matched case-insensitively using longest
-nonoverlapping phrases, with both CamelCase and spaced forms in the vocabulary.
-Definitions and provenance are not terms. Matching does not infer entity values.
+The ontology locates text windows with 16 context tokens on each side of a label.
+Declared aliases and CamelCase/spaced forms share canonical anchor tags. Windows
+stay relative to their central anchor; overlapping token and bigram occurrences
+share weight rather than count twice. Common function-word
+labels are suppressed. No exact field owner, value type or value boundary is inferred.
 
-```text
-weighted_total = total token occurrences + 2 × token occurrences in matched phrases
-weighted_shared = shared token occurrences + 2 × token occurrences in shared phrases
-weighted_overlap = 2 × weighted_shared / weighted_total
-```
+Regions with the same central anchor tag are aligned by maximum-weight one-to-one
+matching. Ambiguous labels require identical window tokens, a shared unambiguous
+neighbouring anchor, or at least two shared context words with Dice at least 0.5.
+Each pair uses equal overlap-weighted token Dice and ordered-bigram Dice. Agreement is
+weighted by region token mass; unmatched regions receive zero. All text and numbers
+inside the region contribute. Ambiguous owners do not add automatic score penalties.
 
-Shared counts use the minimum occurrence count on either side. Repeated phrases
-count; overlapping phrases are not counted twice. Moving intact phrases leaves
-the score unchanged, but breaking a phrase can change its classification.
-Unweighted token overlap remains a diagnostic. No sequence or structure weight
-is added to the primary score. Settings include the ontology SHA-256 and weight.
+Anchor agreement and the fraction of each output selected by localization are
+reported separately. Pages/documents without located regions are excluded. The
+selected text, boundaries, anchors and match details are saved in the differences
+JSON. This is region consensus, not field accuracy or spatial bounding-box scoring.
 
 ### Aggregation and ranking
 
@@ -79,7 +80,7 @@ With five methods, there are ten pairs per document and thirty pairs in this run
 Each method is compared with its four peers:
 
 ```text
-document_score(method, document) = 100 × mean(weighted overlap with each of four peers)
+document_score(method, document) = 100 × mean(region agreement with each of four peers)
 final_score(method) = mean(document_score across the three documents)
 ```
 
@@ -96,8 +97,7 @@ shown above is the mean of the five final method scores, not an accuracy rate.
   is not a Levenshtein error rate, and does not affect the ranking.
 - **Numeric agreement:** the same occurrence-count overlap formula restricted
   to numeric strings. Missing repeated amounts count as disagreements. If neither
-  text has numbers, the diagnostic is `null`, not perfect agreement. Numeric
-  tokens already participate in the primary score; this diagnostic adds no weight.
+  text has numbers, the diagnostic is `null`, not perfect agreement. This diagnostic adds no weight to the field-value score.
 - **Differences:** token alignment passages and unmatched numeric occurrence
   counts are saved in [document_differences.json](document_differences.json).
   A moved passage can appear as a deletion/insertion even when content overlap is high.
@@ -157,6 +157,8 @@ def main():
     for row in result['pairwise_summary']:
         row['documents'] = row.pop('pages')
         row['documents_with_numbers'] = row.pop('pages_with_numbers')
+        row['documents_with_regions'] = row.pop('pages_with_regions')
+        row['documents_with_field_values'] = row.pop('pages_with_field_values')
         for key in list(row):
             if key.startswith('mean_page_'):
                 row[key.replace('mean_page_', 'mean_document_')] = row.pop(key)
@@ -178,7 +180,7 @@ def main():
         writer.writerows(result['ranking'])
     lines = ['# Five-method text consensus comparison', '',
              'Three complete documents; each document has equal weight. Insavlo lacks consistent physical page boundaries, so this is a whole-document comparison, not a page-average comparison. All methods use the same document scope.', '',
-             f'Algorithm version {ALGORITHM_VERSION}: primary agreement is ontology-weighted overlap (3× for concept/field mentions, 1× for other tokens). Matching is lexical; values are not inferred. Each method is scored against its four peers, then averaged across documents. Formatting and case are ignored; signed numbers, decimal separators, accounting parentheses and percentages are retained. Sequence similarity and numeric agreement are separate diagnostics and do not contribute additional weight to the ranking. Numeric agreement counts repeated occurrences. Numeric tokens are included in token overlap. No structure or layout score is used. A text with reordered intact phrases can receive 100 even when word associations differ; this is a content-consensus measure.', '',
+             f'Algorithm version {ALGORITHM_VERSION}: primary agreement compares whole text regions around ontology labels. Each anchor-relative window contains 16 context tokens on either side; overlapping token and bigram weight is shared so text counts once. One-to-one alignment requires the same central anchor tag and contextual evidence for ambiguous anchors; scoring averages overlap-weighted token and ordered-bigram Dice and weights by selected token mass. Unmatched regions receive zero. Localization coverage and anchor agreement are separate diagnostics. Each method averages agreement with four peers, then across documents. No exact value extraction or layout score is used.', '',
              '**Consensus is not accuracy.** Shared errors can increase scores. The openai-6 and fable-5-1 artifacts describe Tesseract with visual review; their folder labels do not verify the named models. Insavlo has no model provenance metadata. No OCR was rerun.', '',
              '| Rank | Method | Mean consensus / 100 | CSA | Board | Trade |',
              '|---:|---|---:|---:|---:|---:|']

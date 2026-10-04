@@ -14,9 +14,13 @@ from html.parser import HTMLParser
 if __package__:
     from .ocr_common import ROOT, write_json
     from .ontology_metrics import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, ontology_metrics, load_ontology
+    from .field_values import extract_field_values, field_value_metrics, validate_ontology_mode
+    from .ontology_regions import extract_ontology_regions, region_metrics, validate_region_context, DEFAULT_REGION_CONTEXT_TOKENS
 else:
     from ocr_common import ROOT, write_json
     from ontology_metrics import DEFAULT_ONTOLOGY, DEFAULT_ENTITY_WEIGHT, ontology_metrics, load_ontology
+    from field_values import extract_field_values, field_value_metrics, validate_ontology_mode
+    from ontology_regions import extract_ontology_regions, region_metrics, validate_region_context, DEFAULT_REGION_CONTEXT_TOKENS
 
 ENGINES = ['mistral', 'openai-6', 'fable-5-1', 'mineru']
 DOCS = {'csa': '1000759706 SSGA - SCB - CSA - EXECUTED - ANON (CLEAN)',
@@ -26,7 +30,7 @@ OUT = ROOT / 'output' / 'performance'
 # Parse only known formatting tags; preserve OCR placeholders such as <REDACTED>.
 FORMATTING_TAGS = set("p div span br hr table thead tbody tfoot tr td th caption h1 h2 h3 h4 h5 h6 b strong i em u s del sup sub ul ol li pre code blockquote a img html body section article".split())
 INLINE_TAGS = set('span b strong i em u s del sup sub code a'.split())
-ALGORITHM_VERSION = '4.0'
+ALGORITHM_VERSION = '6.1'
 
 class Plain(HTMLParser):
     def __init__(self):
@@ -167,7 +171,11 @@ def load(normalize=True):
     return data,manifest
 
 def compare_page(doc, index, a, b, left, right, ontology_path=DEFAULT_ONTOLOGY,
-                 entity_weight=DEFAULT_ENTITY_WEIGHT):
+                 entity_weight=DEFAULT_ENTITY_WEIGHT, *, left_fields=None, right_fields=None,
+                 left_regions=None, right_regions=None, ontology_mode='regions',
+                 region_context_tokens=DEFAULT_REGION_CONTEXT_TOKENS):
+    validate_ontology_mode(ontology_mode)
+    validate_region_context(region_context_tokens)
     x, y = tokens(left), tokens(right)
     cx, cy = collections.Counter(x), collections.Counter(y)
     overlap = sum((cx & cy).values())
@@ -183,7 +191,17 @@ def compare_page(doc, index, a, b, left, right, ontology_path=DEFAULT_ONTOLOGY,
                             'left_context': ' '.join(x[max(0,i-5):min(len(x),j+5)]),
                             'right_context': ' '.join(y[max(0,k-5):min(len(y),l+5)])})
     nx, ny = numeric_counts(left), numeric_counts(right)
-    return {**ontology_metrics(x, y, ontology_path, entity_weight),
+    empty_fields = {'fields': [], 'issues': []}
+    if ontology_mode != 'values':
+        left_fields = right_fields = empty_fields
+    fields = field_value_metrics(
+        left_fields if left_fields is not None else extract_field_values(left, ontology_path),
+        right_fields if right_fields is not None else extract_field_values(right, ontology_path))
+    regions = region_metrics(
+        left_regions if left_regions is not None else extract_ontology_regions(left, ontology_path if ontology_mode == 'regions' else None, context_tokens=region_context_tokens),
+        right_regions if right_regions is not None else extract_ontology_regions(right, ontology_path if ontology_mode == 'regions' else None, context_tokens=region_context_tokens))
+    return {**ontology_metrics(x, y, ontology_path, entity_weight), **fields, **regions,
+            'algorithm_version': ALGORITHM_VERSION, 'ontology_mode': ontology_mode,
             'document':doc, 'page':index, 'left':a, 'right':b,
             'left_tokens':len(x), 'right_tokens':len(y), 'shared_token_occurrences':overlap,
             'token_overlap':2*overlap/denom if denom else 0,
@@ -196,13 +214,17 @@ def compare_page(doc, index, a, b, left, right, ontology_path=DEFAULT_ONTOLOGY,
 
 def main():
     OUT.mkdir(parents=True,exist_ok=True)
-    data,manifest=load()
+    from cross_model_eval import evaluate
+    data,manifest=load(normalize=False)
+    result, comparisons, _, data = evaluate(data)
     _, ontology_metadata = load_ontology()
     write_json(OUT/'metric_settings.json', {'algorithm_version': ALGORITHM_VERSION,
-               'ontology': ontology_metadata, 'entity_weight': DEFAULT_ENTITY_WEIGHT})
+               'ontology': ontology_metadata, 'entity_weight': DEFAULT_ENTITY_WEIGHT,
+               **result['settings']})
+    write_json(OUT/'excluded_pages.json', result['excluded_pages'])
     write_json(OUT/'normalized_pages.json',data)
     write_json(OUT/'provenance.json',manifest)
-    metrics=[]; comparisons=[]; page_metrics=[]
+    metrics=[]; page_metrics=[]
     for doc,engines in data.items():
         lengths={len(r['pages']) for r in engines.values()}
         if len(lengths)!=1:
@@ -215,28 +237,30 @@ def main():
             for i,text in enumerate(page_list,1):
                 page_metrics.append({'document':doc,'page':i,'engine':engine,
                                      'characters':len(text),'tokens':len(tokens(text))})
-        for a,b in itertools.combinations(ENGINES,2):
-            for i,(left,right) in enumerate(zip(engines[a]['pages'],engines[b]['pages']),1):
-                comparisons.append(compare_page(doc,i,a,b,left,right))
     summaries=[]
     for doc in [*DOCS,'all']:
         for a,b in itertools.combinations(ENGINES,2):
-            selected=[r for r in comparisons if r['left']==a and r['right']==b
+            selected=[r for r in comparisons if {r['left'], r['right']} == {a, b}
                       and (doc=='all' or r['document']==doc)]
             denom=sum(r['left_tokens']+r['right_tokens'] for r in selected)
+            region_total = sum(r['ontology_region_total_tokens'] for r in selected)
             summaries.append({'document':doc,'left':a,'right':b,'pages':len(selected),
-                              'token_overlap':2*sum(r['shared_token_occurrences'] for r in selected)/denom if denom else 1,
+                              'ontology_region_agreement': sum(r['ontology_region_matched_mass'] for r in selected) / region_total if region_total else None,
+                              'token_overlap':2*sum(r['shared_token_occurrences'] for r in selected)/denom if denom else 0,
                               'ontology_weighted_overlap':2*sum(r['ontology_weighted_shared'] for r in selected)/sum(r['ontology_weighted_total'] for r in selected) if sum(r['ontology_weighted_total'] for r in selected) else 0,
-                              'mean_page_sequence_similarity':statistics.mean(r['sequence_similarity'] for r in selected)})
+                              'mean_page_sequence_similarity':statistics.mean(r['sequence_similarity'] for r in selected) if selected else None})
     review_pages=[]
     for doc in DOCS:
         for page in range(1,len(data[doc][ENGINES[0]]['pages'])+1):
             pairs=[r for r in comparisons if r['document']==doc and r['page']==page]
+            if not pairs:
+                continue
             review_pages.append({'document':doc,'page':page,
+                                 'mean_region_agreement': statistics.mean(r['primary_similarity'] for r in pairs),
                                  'mean_ontology_weighted_overlap':statistics.mean(r['ontology_weighted_overlap'] for r in pairs),
                                  'mean_pairwise_overlap':statistics.mean(r['token_overlap'] for r in pairs),
                                  'mean_pairwise_sequence_similarity':statistics.mean(r['sequence_similarity'] for r in pairs)})
-    review_pages.sort(key=lambda r:r['mean_ontology_weighted_overlap'])
+    review_pages.sort(key=lambda r:r['mean_region_agreement'])
     write_json(OUT/'metrics.json',metrics)
     write_json(OUT/'page_metrics.json',page_metrics)
     write_json(OUT/'agreement.json',[{k:v for k,v in r.items() if k!='changes'} for r in comparisons])
@@ -245,15 +269,16 @@ def main():
     write_json(OUT/'review_priority.json',review_pages)
     write_report(metrics,summaries,review_pages,data)
     write_view(data,comparisons)
-    print('Generated text-only comparison: 12 document/output records, 288 page pairs.')
+    print(f'Generated ontology region comparison: {len(comparisons)} scored pairs; {len(result["excluded_pages"])} excluded pages.')
     for r in summaries:
         if r['document']=='all': print(r)
 
 
 def write_report(metrics,summaries,review_pages,data):
+    percent = lambda value: f'{value:.1%}' if value is not None else 'n/a'
     lines=['# OCR text comparison — no ground truth',
            '', 'This report compares the text in four saved output sets across three documents and 48 pages. It does not rank accuracy, identify a correct engine, or score document structure. More text and higher agreement do not establish correctness.',
-           '', 'The earlier structure measures, reference-anchor scores, field-extraction comparisons, speed/cost discussion, and best-engine recommendation are superseded by this text-only analysis.',
+           '', 'The primary metric compares ontology text regions. Token and label overlap remain diagnostics. Pages without located ontology regions are listed in excluded_pages.json.',
            '', '## Text normalization', '',
            'The comparison removes HTML tags, Markdown headings/bullets, table separators, image links and emphasis markers while retaining text, including text inside table cells. Unicode is normalized with NFKC and whitespace is collapsed. The view preserves case and punctuation. Similarity uses case-insensitive word/number tokens and ignores punctuation; numeric-string differences separately retain punctuation and leading zeroes. Line wrapping, layout, table geometry, bounding boxes, confidence values and extraction schemas are not evaluated.',
            '', 'The plain-text layer is taken from Mistral page responses, MinerU block content, openai-6 page Markdown, and Fable full_page_text lines. Fable’s separate reviewed fields, summaries and confidence commentary are excluded. Commentary already embedded inside an engine’s page transcription is retained and can affect agreement.',
@@ -262,13 +287,13 @@ def write_report(metrics,summaries,review_pages,data):
            '', '| Pair | Token overlap, all 48 pages | Mean page sequence similarity |',
            '|---|---:|---:|']
     for r in summaries:
-        if r['document']=='all':lines.append(f"| {r['left']} ↔ {r['right']} | {r['token_overlap']:.1%} | {r['mean_page_sequence_similarity']:.1%} |")
-    lines += ['', '### Ontology-weighted agreement', '',
-              'Ontology concept and field mentions receive weight 3; other tokens weight 1. Matching uses longest nonoverlapping lexical phrases, including CamelCase and spaced names. Values are not inferred. Unweighted overlap remains available for comparison.', '',
-              '| Pair | Ontology-weighted overlap |', '|---|---:|']
+        if r['document']=='all':lines.append(f"| {r['left']} ↔ {r['right']} | {percent(r['token_overlap'])} | {percent(r['mean_page_sequence_similarity'])} |")
+    lines += ['', '### Ontology region agreement', '',
+              'Select one window with 16 context tokens on each side of every ontology anchor. Token and bigram weight is shared among covering windows, so text counts once. Align windows one-to-one within the same central anchor tag; ambiguous labels require contextual evidence. Compare overlap-weighted regional tokens and ordered bigrams equally, then weight by region token mass. Unmatched regions receive zero. Exact values, dates and field owners are not parsed. Anchor agreement and selected-text coverage are reported separately.', '',
+              '| Pair | Region agreement |', '|---|---:|']
     for r in summaries:
         if r['document'] == 'all':
-            lines.append(f"| {r['left']} ↔ {r['right']} | {r['ontology_weighted_overlap']:.1%} |")
+            lines.append(f"| {r['left']} ↔ {r['right']} | {percent(r['ontology_region_agreement'])} |")
     lines += ['', 'Agreement can reflect shared errors, shared preprocessing or manual editing. It should not be used as an accuracy ranking.', '', '### Token overlap by document', '', '| Pair | Agreement PDF | Board resolution | Trade PDF |','|---|---:|---:|---:|']
     for a,b in itertools.combinations(ENGINES,2):
         values=[next(r['token_overlap'] for r in summaries if r['document']==d and r['left']==a and r['right']==b) for d in DOCS]
@@ -282,8 +307,8 @@ def write_report(metrics,summaries,review_pages,data):
               '- **Trade page 1:** Mistral and MinerU say `1st Time Scan`; openai-6 and Fable raw text say `ist Time Scan`.',
               '- **Trade page 18:** Mistral starts with `2816128`; MinerU starts with `2:5/6/28`. openai-6 contains `HEGOTIATED BY` and `STANDARD CHARTERED pany`; Fable raw text contains fragments such as `CLAN Cuda Tp`. The outputs diverge substantially; none is designated ground truth.',
               '- **Board account-number passages:** the saved texts differ on some leading digits. The numeric-string differences in the JSON and page view preserve leading zeroes instead of treating identifiers as numbers or reconciling them across pages.',
-              '', '## Pages with greatest disagreement', '', 'Sorted by the mean ontology-weighted overlap across all six pairs on each page. This is a review queue, not a list of proven errors. A short page can produce a low score from only a few differing tokens.', '', '| Document | Page | Mean ontology-weighted overlap |','|---|---:|---:|']
-    for r in review_pages[:12]:lines.append(f"| {r['document']} | {r['page']} | {r['mean_ontology_weighted_overlap']:.1%} |")
+              '', '## Pages with greatest disagreement', '', 'Sorted by the mean ontology region agreement across all six pairs on each page. This is a review queue, not a list of proven errors. A short page can produce a low score from only a few differing tokens.', '', '| Document | Page | Mean region agreement |','|---|---:|---:|']
+    for r in review_pages[:12]:lines.append(f"| {r['document']} | {r['page']} | {r['mean_region_agreement']:.1%} |")
     lines += ['', '## Interpretation limits', '',
               '- `openai-6` and `fable-5-1` are folder labels. Their metadata identifies Tesseract plus visual review, so this is not a verified GPT-6-versus-Fable inference benchmark.',
               '- Fable’s reviewed fields are excluded, but selective corrections already present in openai-6 page text remain. The saved workflows are not controlled, identical experiments.',
@@ -312,7 +337,20 @@ def write_view(data,comparisons):
             sections.append('</div>')
             for r in comparisons:
                 if r['document']!=doc or r['page']!=n+1:continue
-                sections.append(f'<details><summary>{r["left"]} ↔ {r["right"]}: overlap {r["token_overlap"]:.1%}</summary>')
+                sections.append(f'<details><summary>{r["left"]} ↔ {r["right"]}: region agreement {r["primary_similarity"]:.1%}; token overlap {r["token_overlap"]:.1%}</summary>')
+                sections.append('<table><tr><th>Left region and selected-text coverage</th><th>Right region and selected-text coverage</th></tr>')
+                for match in r['region_matches']:
+                    sections.append('<tr>')
+                    for side in ('left', 'right'):
+                        region = next(x for x in r[f'{side}_ontology_regions'] if x['region'] == match[f'{side}_region'])
+                        coverage = r[f'{side}_region_localization']['selected_token_fraction']
+                        sections.append(f'<td>Lines {region["start_line"]}–{region["end_line"]}; selected {coverage:.1%} of output; pair similarity {match["similarity"]:.1%}<pre>{html.escape(region["text"])}</pre></td>')
+                    sections.append('</tr>')
+                for side in ('left', 'right'):
+                    for region in r[f'unmatched_{side}_ontology_regions']:
+                        passage = html.escape(region['text'])
+                        sections.append('<tr>' + (f'<td>Unmatched left region<pre>{passage}</pre></td><td></td>' if side == 'left' else f'<td></td><td>Unmatched right region<pre>{passage}</pre></td>') + '</tr>')
+                sections.append('</table>')
                 sections.append('<p>Numeric strings only on left: '+html.escape(', '.join(r['only_left_numeric_strings']))+'<br>Only on right: '+html.escape(', '.join(r['only_right_numeric_strings']))+'</p>')
                 sections.append('<table><tr><th>Left differing tokens (with context)</th><th>Right differing tokens (with context)</th></tr>')
                 for c in r['changes']:
