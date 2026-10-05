@@ -19,6 +19,18 @@ and `family-sensitivity`. Real accuracy results require reviewed profiles and
 independent image-verified references; existing peer-consensus outputs are not
 ground truth. The example profiles and annotations are illustrative only.
 
+To reproduce the exploratory evaluation of the six saved outputs:
+
+```bash
+conda run --no-capture-output -n myenv3.13 python scripts/evaluate_six_critical_fields.py
+```
+
+The [pilot report](output/six_critical_field_evaluation/report.md) covers 27
+image-checked fields across seven pages, with a complete field audit and engine-family
+consensus sensitivity. It measures OCR plus strict extraction on these documents;
+it is not a held-out or independently human-adjudicated benchmark. The script
+checks source and saved-artifact hashes and retains incorrect OCR values.
+
 ## Standalone Python library
 
 See [standalone_ocr_eval/README.md](standalone_ocr_eval/README.md) for installation, API, CLI, input schema, and optional ontology instructions.
