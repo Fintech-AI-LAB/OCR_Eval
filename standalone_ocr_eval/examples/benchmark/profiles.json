@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "trade_confirmation": {
+      "review_status": "example",
+      "competency_questions": [
+        "Which account receives the settlement for each transaction?",
+        "What amount, currency and date apply to each transaction?"
+      ],
+      "record_key_labels": [
+        "Transaction",
+        "Record"
+      ],
+      "fields": {
+        "SettlementAmount": {
+          "ontology_id": "concept:Amount",
+          "aliases": [
+            "Amount",
+            "Settlement Amount"
+          ],
+          "value_type": "amount",
+          "critical": true,
+          "required": true,
+          "weight": 5,
+          "requires": [
+            "Currency"
+          ],
+          "rationale": "Illustrative cost: an incorrect amount changes the settlement obligation."
+        },
+        "Currency": {
+          "ontology_id": "concept:Currency",
+          "aliases": [
+            "CCY"
+          ],
+          "value_type": "currency",
+          "critical": true,
+          "required": true,
+          "weight": 2,
+          "constraints": {
+            "enum": [
+              "USD",
+              "EUR",
+              "SGD"
+            ]
+          },
+          "rationale": "Illustrative cost: an incorrect currency changes the meaning of the amount."
+        },
+        "AccountNumber": {
+          "ontology_id": "concept:Account",
+          "aliases": [
+            "Account No",
+            "Account Number"
+          ],
+          "value_type": "identifier",
+          "critical": true,
+          "required": true,
+          "weight": 3,
+          "constraints": {
+            "pattern": "[0-9]{5}"
+          },
+          "rationale": "Illustrative cost: an incorrect account can misdirect settlement."
+        },
+        "SettlementDate": {
+          "aliases": [
+            "Settlement Date"
+          ],
+          "value_type": "date",
+          "critical": true,
+          "required": true,
+          "weight": 2,
+          "rationale": "Illustrative cost: an incorrect date changes processing timing."
+        }
+      }
+    }
+  }
+}

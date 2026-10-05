@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "annotation_status": "synthetic",
+  "documents": {
+    "synthetic-trade": {
+      "profile": "trade_confirmation",
+      "template_id": "synthetic-trade-v1",
+      "split": "test",
+      "source": {
+        "path": "synthetic-source.md",
+        "sha256": "59cede3802ecc1eb1b6694aecce9678cc145c7c93a334b8e615a5b11136a8a4a"
+      },
+      "records": [
+        {
+          "id": "T1",
+          "fields": {
+            "SettlementAmount": {
+              "status": "present",
+              "value": "100.00",
+              "page": 1,
+              "bbox": [
+                0.1,
+                0.2,
+                0.25,
+                0.25
+              ]
+            },
+            "Currency": {
+              "status": "present",
+              "value": "USD",
+              "page": 1,
+              "bbox": [
+                0.30000000000000004,
+                0.2,
+                0.45,
+                0.25
+              ]
+            },
+            "AccountNumber": {
+              "status": "present",
+              "value": "00123",
+              "page": 1,
+              "bbox": [
+                0.5,
+                0.2,
+                0.65,
+                0.25
+              ]
+            },
+            "SettlementDate": {
+              "status": "present",
+              "value": "2026-10-01",
+              "page": 1,
+              "bbox": [
+                0.7000000000000001,
+                0.2,
+                0.8500000000000001,
+                0.25
+              ]
+            }
+          }
+        },
+        {
+          "id": "T2",
+          "fields": {
+            "SettlementAmount": {
+              "status": "present",
+              "value": "200.00",
+              "page": 1,
+              "bbox": [
+                0.1,
+                0.30000000000000004,
+                0.25,
+                0.35
+              ]
+            },
+            "Currency": {
+              "status": "present",
+              "value": "EUR",
+              "page": 1,
+              "bbox": [
+                0.30000000000000004,
+                0.30000000000000004,
+                0.45,
+                0.35
+              ]
+            },
+            "AccountNumber": {
+              "status": "present",
+              "value": "00456",
+              "page": 1,
+              "bbox": [
+                0.5,
+                0.30000000000000004,
+                0.65,
+                0.35
+              ]
+            },
+            "SettlementDate": {
+              "status": "present",
+              "value": "2026-10-02",
+              "page": 1,
+              "bbox": [
+                0.7000000000000001,
+                0.30000000000000004,
+                0.8500000000000001,
+                0.35
+              ]
+            }
+          }
+        }
+      ],
+      "regions": [
+        {
+          "id": "settlement-table",
+          "page": 1,
+          "bbox": [
+            0.1,
+            0.1,
+            0.95,
+            0.5
+          ],
+          "text": "| Transaction | Amount | Currency | Account No | Settlement Date |\n|---|---|---|---|---|\n| T1 | 100.00 | USD | 00123 | 2026-10-01 |\n| T2 | 200.00 | EUR | 00456 | 2026-10-02 |\n"
+        }
+      ]
+    }
+  }
+}

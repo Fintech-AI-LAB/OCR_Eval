@@ -1,0 +1,18 @@
+{
+  "synthetic-trade": {
+    "perfect": {
+      "pages": [
+        "| Transaction | Amount | Currency | Account No | Settlement Date |\n|---|---|---|---|---|\n| T1 | 100.00 | USD | 00123 | 2026-10-01 |\n| T2 | 200.00 | EUR | 00456 | 2026-10-02 |\n"
+      ],
+      "input_format": "markdown",
+      "source_sha256": "59cede3802ecc1eb1b6694aecce9678cc145c7c93a334b8e615a5b11136a8a4a"
+    },
+    "wrong_amount": {
+      "pages": [
+        "| Transaction | Amount | Currency | Account No | Settlement Date |\n|---|---|---|---|---|\n| T1 | 900.00 | USD | 00123 | 2026-10-01 |\n| T2 | 200.00 | EUR | 00456 | 2026-10-02 |\n"
+      ],
+      "input_format": "markdown",
+      "source_sha256": "59cede3802ecc1eb1b6694aecce9678cc145c7c93a334b8e615a5b11136a8a4a"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "documents": {
+    "synthetic-trade": {
+      "profile": "trade_confirmation",
+      "source_path": "synthetic-source.md",
+      "template_id": "synthetic-trade-v1",
+      "record_ids": [
+        "T1",
+        "T2"
+      ],
+      "split": "test"
+    }
+  }
+}

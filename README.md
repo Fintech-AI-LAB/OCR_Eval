@@ -1,5 +1,24 @@
 # OCR evaluation
 
+## Reference-based critical-field benchmark
+
+Use the new [benchmark guide](standalone_ocr_eval/BENCHMARK.md) to define reviewed
+document profiles, create image-annotation templates, and measure field accuracy
+against fixed references. It reports missing/extra/wrong values, record and
+currency associations, literal transcription, localization, constraints and
+document success. Existing consensus commands remain unchanged.
+
+Run the explicitly synthetic example (no OCR requests):
+
+```bash
+conda run --no-capture-output -n myenv3.13 python scripts/benchmark_ocr.py benchmark --profiles standalone_ocr_eval/examples/benchmark/profiles.json --references standalone_ocr_eval/examples/benchmark/references.json --predictions standalone_ocr_eval/examples/benchmark/predictions.json --output output/critical_field_demo
+```
+
+The CLI also provides `init-reference`, `extract-profile`, `compare-variants`,
+and `family-sensitivity`. Real accuracy results require reviewed profiles and
+independent image-verified references; existing peer-consensus outputs are not
+ground truth. The example profiles and annotations are illustrative only.
+
 ## Standalone Python library
 
 See [standalone_ocr_eval/README.md](standalone_ocr_eval/README.md) for installation, API, CLI, input schema, and optional ontology instructions.

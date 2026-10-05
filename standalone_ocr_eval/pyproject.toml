@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ocr-text-eval"
-version = "0.3.1"
-description = "Standalone OCR consensus evaluation with optional ontology region scoring"
+version = "0.4.0"
+description = "OCR consensus and reference-based critical-field evaluation with document profiles"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []

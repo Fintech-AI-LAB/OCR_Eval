@@ -1,5 +1,11 @@
 # OCR text evaluation library
 
+Version 0.4 adds a separate [critical-field benchmark](BENCHMARK.md) with document
+profiles, reviewed reference annotations, record-aware field metrics, fixed-region
+OCR metrics, schema diagnostics, controlled variant comparisons and engine-family
+consensus sensitivity. Use `ocr-eval benchmark` for reference-based accuracy.
+The existing page and batch consensus APIs below keep their existing behavior.
+
 `ocr-text-eval` evaluates agreement among OCR transcriptions of the same pages.
 It needs no OCR backend, repository data, or third-party runtime dependency.
 Scores measure **consensus, not accuracy**. The ontology is optional and is not
