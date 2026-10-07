@@ -442,3 +442,88 @@ Scores from these modes must not be mixed or interpreted as region scores. Conse
 reference values before it can be interpreted as accuracy. Extraction coverage
 is limited to supported labels and structures; inspect issues and extracted values
 when applying the full ontology to a new document family.
+
+## API LLM schema selection and critical-field identification
+
+The `identify-critical-fields` command uses an OpenAI-compatible Chat Completions
+endpoint in two stages: the model selects relevant ontology schemas, then identifies
+critical fields and their verbatim evidence. It accepts one OCR Markdown/text or JSON
+document, without a reference transcription or source image. Existing consensus and
+reference-benchmark commands retain their behavior.
+
+Compile the full ontology once (streams the repository's large JSON export):
+
+```bash
+conda run --no-capture-output -n myenv3.13 python scripts/benchmark_ocr.py compile-schemas \
+  --ontology /Users/yimingqian/Documents/GitHub/Finance_OCR_Benchmark/output/phase5_refiltered/ontology.json \
+  --output output/llm_critical_fields/iso20022_schemas.json
+```
+
+The compiler also accepts `document_ontology.json`, or an explicit catalog with
+`schema_version: 1` and a `schemas` list. Each schema has a unique `id`, `name`,
+`definition`, and `fields` list; each field has an `id`, `name`, and optional
+`definition`. The full graph supplies direct business/message owner fields, including
+unmapped ones, with source IDs, definitions, registration status, and selected type
+and cardinality attributes. It does not infer inherited fields or translate every
+ontology edge into a constraint. The compact export lacks field definitions.
+
+Set `OPENAI_API_KEY` in your environment. Supply the model explicitly with `--model`
+or `OPENAI_MODEL`. Set `OPENAI_BASE_URL` or `--base-url` for another compatible server;
+the default is `https://api.openai.com/v1`. The server must support `/chat/completions`
+and `response_format: {"type":"json_object"}`. No new package is required.
+
+```bash
+conda run --no-capture-output -n myenv3.13 python scripts/benchmark_ocr.py identify-critical-fields \
+  output/six_critical_field_evaluation/decoded/mistral/board.txt \
+  --schemas output/llm_critical_fields/iso20022_schemas.json \
+  --model "$OPENAI_MODEL" \
+  --output output/llm_critical_fields/mistral_board.json
+```
+
+Use `--policy policy.txt` to specify financial criticality criteria. The disclosed
+default considers party identity, routing, monetary obligations, operative dates,
+authorization, and transaction interpretation. These are model-proposed decisions,
+not domain-expert approval. ISO field membership and minOccurs do not establish
+criticality or document requiredness.
+
+Processing and output contract:
+
+- All text is processed in overlapping character chunks (`--chunk-chars 12000`,
+  `--overlap 1000`). JSON values retain RFC 6901 pointers; nearby scalar properties
+  supply limited context. Run each OCR document separately, not a JSON container
+  combining engines or reference answers. For structured JSON, a parent object's
+  scalar context is limited to 4,000 characters; full sibling/table relationships
+  may require preprocessing into text blocks.
+- Local lexical retrieval shortlists `--top-k 20` schemas per block; the LLM makes
+  the final selection, including abstention and uncovered topics. Retrieval is a
+  bounded candidate stage, not exhaustive coverage or embedding search. Increase
+  top-k to assess retrieval sensitivity. Selected fields are batched in groups of
+  `--field-batch 40`, with no silent field-list truncation.
+- `routes` records schema candidates and selections. `decisions` records critical
+  and noncritical proposals, rationales, and block-local found/unlocated/ambiguous
+  states. Omitted candidates are unassessed, not negative labels.
+- `fields` contains only occurrences whose exact quoted evidence is found in the
+  source block and whose value occurs once in that quote. Offsets are computed by
+  code, zero-based and end-exclusive in Unicode characters. Markdown offsets refer
+  to the original UTF-8-decoded text, including CRLF; JSON offsets refer to the
+  decoded string. For JSON numbers/booleans, the pointer identifies the value and
+  offsets refer to its JSON scalar rendering, not raw-file byte positions.
+- Rejected evidence is preserved in `issues`. Raw model proposals remain in
+  `decisions` and the API trace, and must not be treated as verified occurrences.
+  `source_verified` proves literal membership only, not correct semantic binding
+  or original-image fidelity. Overlapping identical field spans are deduplicated;
+  different schema mappings and conflicting criticality judgments remain visible.
+- Output includes input/catalog/ontology/policy fingerprints, prompt version,
+  request hashes, model responses, usage, and model identity. API keys are not
+  stored. These audit outputs contain source excerpts and extracted document data.
+- HTTP rate-limit/server failures retry twice; refusals, incomplete responses,
+  invalid IDs and malformed decision structures fail the run rather than silently
+  switching to regex. A failed run writes no result; resume/checkpointing is not
+  implemented. Model responses can vary between runs.
+
+This command implements reference-free **identification**, not a validated OCR
+quality estimator. It emits no accuracy score and does not automatically change
+benchmark denominators or promote model-selected fields into reviewed profiles.
+An unlocated field in one chunk is not proof that the source document omitted it.
+
+API contract: https://developers.openai.com/api/reference/resources/chat

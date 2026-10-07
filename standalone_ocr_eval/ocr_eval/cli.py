@@ -2,6 +2,7 @@
 import argparse
 import csv
 import json
+import os
 from pathlib import Path
 
 from .batch import evaluate
@@ -85,9 +86,36 @@ def main(argv=None):
     sensitivity.add_argument('pairs', type=Path)
     sensitivity.add_argument('--families', type=Path, required=True)
     sensitivity.add_argument('--output', type=Path, required=True)
+    catalog = sub.add_parser('compile-schemas', help='Compile extraction schemas from a full or compact ontology.')
+    catalog.add_argument('--ontology', type=Path, required=True)
+    catalog.add_argument('--output', type=Path, required=True)
+    llm = sub.add_parser('identify-critical-fields', help='Use an API LLM to select schemas and locate critical fields without references.')
+    llm.add_argument('input', type=Path, help='One OCR Markdown/text or JSON document.')
+    llm.add_argument('--schemas', type=Path, required=True)
+    llm.add_argument('--model', default=os.environ.get('OPENAI_MODEL'))
+    llm.add_argument('--base-url', default=os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1'))
+    llm.add_argument('--policy', type=Path, help='UTF-8 criticality policy; defaults to disclosed financial criteria.')
+    llm.add_argument('--top-k', type=int, default=20)
+    llm.add_argument('--chunk-chars', type=int, default=12000)
+    llm.add_argument('--overlap', type=int, default=1000)
+    llm.add_argument('--field-batch', type=int, default=40)
+    llm.add_argument('--output', type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command in {'benchmark', 'compare-variants'}:
+        if args.command in {'compile-schemas', 'identify-critical-fields'}:
+            from .llm_fields import compile_catalog, discover, ChatClient, DEFAULT_POLICY, read_json
+            if args.command == 'compile-schemas':
+                result = compile_catalog(args.ontology)
+            else:
+                client = ChatClient(args.model, args.base_url)
+                result = discover(args.input, read_json(args.schemas), client,
+                    policy=args.policy.read_text(encoding='utf-8') if args.policy else DEFAULT_POLICY,
+                    top_k=args.top_k, chunk_chars=args.chunk_chars, overlap=args.overlap,
+                    field_batch=args.field_batch)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(args.output, result)
+            print(f'Written: {args.output.resolve()}')
+        elif args.command in {'benchmark', 'compare-variants'}:
             profiles, references = load_profiles(args.profiles), load_json(args.references)
             settings = dict(split=args.split, weighting=args.weighting, iou_threshold=args.iou_threshold)
             if args.command == 'benchmark':
