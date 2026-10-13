@@ -9,10 +9,48 @@ from .batch import evaluate
 from .page import score_page_details
 from .benchmark import evaluate_benchmark, compare_benchmark_variants, consensus_family_sensitivity
 from .profiles import load_json, load_profiles, extract_profile_predictions, make_reference_template
+from .saved import evaluate_saved
+from .corroboration import passage_csv_rows, DEFAULT_MIN_FAMILIES, DEFAULT_MIN_FRACTION
 
 
 def _write_json(path, value):
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + '\n', encoding='utf-8')
+
+
+def _write_saved(output, result):
+    output.mkdir(parents=True, exist_ok=True)
+    _write_json(output / 'results.json', result)
+    for name in ('document_agreement', 'page_agreement', 'passage_corroboration'):
+        _write_json(output / f'{name}.json', result[name])
+    with (output / 'comparison.csv').open('w', newline='', encoding='utf-8') as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(result['ranking'][0]))
+        writer.writeheader()
+        writer.writerows(result['ranking'])
+    rows = list(passage_csv_rows(result['passage_corroboration']))
+    fields = list(rows[0]) if rows else ['document', 'method', 'page', 'status', 'flags', 'text']
+    for name, selected in (('passage_corroboration', rows),
+                           ('uncertain_passages', [r for r in rows if r['status'] == 'uncertain']),
+                           ('flagged_passages', [r for r in rows if r['flags']])):
+        with (output / f'{name}.csv').open('w', newline='', encoding='utf-8') as stream:
+            writer = csv.DictWriter(stream, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(selected)
+    required = result['passage_corroboration']['required_family_count']
+    lines = ['# Full-text evaluation without ontology', '', result['meaning'], '',
+             f'Passage corroboration requires **{required} engine families**.', '',
+             '| Workflow | Score /100 | Corroborated passages | Uncertain passages |',
+             '|---|---:|---:|---:|']
+    for row in result['ranking']:
+        name = row['method'].replace('|', '\\|').replace('\n', ' ')
+        score = 'N/A' if row['score'] is None else f"{row['score']:.2f}"
+        counts = ['N/A' if row[k] is None else str(row[k])
+                  for k in ('corroborated_passages', 'uncertain_passages')]
+        lines.append(f'| {name} | {score} | {counts[0]} | {counts[1]} |')
+    lines.extend(['', 'Score averages token Dice and ordered-bigram Dice with fixed, equal engine-family '
+                  'votes and equal document weighting. Passage thresholds affect corroboration only. '
+                  'Passage counts depend on source formatting and are not model rankings. '
+                  'Document-only methods have no passage counts. Conflicts remain separately flagged.', ''])
+    (output / 'report.md').write_text('\n'.join(lines), encoding='utf-8')
 
 
 def _write_benchmark(output, result):
@@ -49,6 +87,13 @@ def _write_benchmark(output, result):
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Evaluate OCR consensus or accuracy against explicit references.')
     sub = parser.add_subparsers(dest='command', required=True)
+    saved = sub.add_parser('evaluate-saved', help='Evaluate saved full text without ontology, with passage corroboration.')
+    saved.add_argument('input', type=Path, help='JSON object containing data, families, and panel.')
+    saved.add_argument('--output', type=Path, default=Path('ocr-saved-results'))
+    saved.add_argument('--corroboration-min-families', type=int, default=DEFAULT_MIN_FAMILIES)
+    saved.add_argument('--corroboration-min-fraction', type=float, default=DEFAULT_MIN_FRACTION,
+                       help='Optional proportional floor; 0 (default) requires only two families.')
+    saved.add_argument('--passage-tokens', type=int, default=40)
     page = sub.add_parser('page', help='Score two or more OCR files for one physical page.')
     page.add_argument('files', nargs='+', type=Path)
     batch = sub.add_parser('batch', help='Rank page-aligned methods from a JSON file.')
@@ -102,7 +147,16 @@ def main(argv=None):
     llm.add_argument('--output', type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command in {'compile-schemas', 'identify-critical-fields'}:
+        if args.command == 'evaluate-saved':
+            bundle = load_json(args.input)
+            result = evaluate_saved(bundle['data'], bundle['families'], bundle['panel'],
+                min_families=args.corroboration_min_families,
+                min_fraction=args.corroboration_min_fraction, passage_tokens=args.passage_tokens)
+            _write_saved(args.output, result)
+            for row in result['ranking']:
+                print(f"{row['method']}: {row['score']:.2f}")
+            print(f'Results: {args.output.resolve()}')
+        elif args.command in {'compile-schemas', 'identify-critical-fields'}:
             from .llm_fields import compile_catalog, discover, ChatClient, DEFAULT_POLICY, read_json
             if args.command == 'compile-schemas':
                 result = compile_catalog(args.ontology)

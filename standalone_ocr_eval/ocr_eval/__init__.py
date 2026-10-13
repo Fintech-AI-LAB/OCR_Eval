@@ -13,6 +13,9 @@ from .page import score_models, score_page, score_page_details
 from .text import ALGORITHM_VERSION, compare_page, normalize_texts
 from .benchmark import evaluate_benchmark, compare_benchmark_variants, consensus_family_sensitivity
 from .profiles import load_profiles, extract_profile_predictions, make_reference_template
+from .corroboration import corroborate_saved
+from .unified import compare_saved
+from .saved import evaluate_saved
 
 __all__ = [
     'ALGORITHM_VERSION', 'compare_page', 'evaluate', 'load_ontology',
@@ -20,4 +23,5 @@ __all__ = [
     'extract_ontology_regions', 'region_metrics', 'score_models', 'score_page', 'score_page_details',
     'evaluate_benchmark', 'compare_benchmark_variants', 'consensus_family_sensitivity',
     'load_profiles', 'extract_profile_predictions', 'make_reference_template',
+    'corroborate_saved', 'compare_saved', 'evaluate_saved',
 ]

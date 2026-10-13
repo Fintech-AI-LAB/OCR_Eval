@@ -1,5 +1,83 @@
 # OCR evaluation
 
+## Unified comparison of all saved workflows
+
+Use this command for the current cross-model comparison; the experiment-specific
+reports below are historical snapshots with different peers and scoring versions.
+
+```bash
+conda run --no-capture-output -n myenv3.13 python scripts/evaluate_all_saved.py
+```
+
+The [unified report](output/unified_corroboration_2families_v2/report.md) and
+[comparison CSV](output/unified_corroboration_2families_v2/comparison.csv) cover 12 saved workflows,
+including both Unlimited-OCR variants, Claude's partial run and saved Tesseract
+hybrid, and correctly labelled historical Tesseract outputs. This is offline
+evaluation of existing artifacts, with no OCR/API requests.
+
+- One unchanged 27-field reference pilot, equal document weighting, and physical
+  page routing for every aligned output. Benchmark 1.1 rejects duplicate answers
+  for a record/field instead of choosing the answer closest to the reference.
+- Full 48-page results retain failed pages as empty and truncated text as saved.
+  A separate identical 45-page completed subset is used for all aligned workflows.
+  Coverage and complete-document success are shown alongside selected-field scores.
+- Agreement is a secondary diagnostic: equal token/ordered-bigram Dice, a fixed
+  panel, and equal engine-family votes excluding relatives of the candidate.
+  Additional candidates do not become voters. Tokenization is independent per
+  output; the evaluator avoids global sequence alignment and candidate-only pairs.
+- Passage corroboration is a separate diagnostic using monotonic token alignment
+  within physical pages. [Passage CSV](output/unified_corroboration_2families_v2/passage_corroboration.csv)
+  lists family support counts, source text, context, offsets, uncertainty reasons and separate flags;
+  [uncertain passages](output/unified_corroboration_2families_v2/uncertain_passages.csv) filters
+  below-threshold text, while [flagged passages](output/unified_corroboration_2families_v2/flagged_passages.csv)
+  includes disagreements and alignment concerns even on corroborated text. The matching JSON includes every panel member's alternate
+  reading and normalized token span. Passage rows are per source workflow, not
+  deduplicated ground-truth regions.
+- Insavlo lacks physical page boundaries and remains available only in the
+  document-agreement and unbound-extraction diagnostics, not page-bound accuracy.
+- Selected artifact, source, evaluator and policy hashes are locked in
+  `run_manifest.json`. Identical reruns are allowed; changed inputs or code require
+  a different `--output` directory. Existing historical outputs are preserved.
+
+This remains an exploratory sample of seven pages from three documents, with
+post-hoc extraction rules. More models do not make it a held-out benchmark.
+Independent reference review and additional documents cannot be supplied by
+rescoring the existing outputs. See the report's provenance caveats and
+[field audit](output/unified_corroboration_2families_v2/field_audit.csv).
+
+Passage corroboration defaults to **two independent engine families**, with no
+proportional floor (`min_families=2`, `min_fraction=0`). Every configured
+panel member of a family must have completed the page and support the exact
+normalized passage for that family to vote. Family disagreements are flagged;
+failed/truncated members abstain and the denominator does not shrink. A source
+counts only if it belongs to the fixed panel. `other_family_support_count`
+separately excludes the source's family ancestry. Non-panel candidates never vote.
+
+The threshold is configurable with `--corroboration-min-families`,
+`--corroboration-min-fraction` and `--passage-tokens` (default 40, maximum 128).
+The fraction default of zero disables the proportional requirement; a nonzero
+fraction raises the threshold to the larger of the count and the rounded-up
+fraction of configured families. The older three-family/50% policy remains
+available by explicitly passing `--corroboration-min-families 3
+--corroboration-min-fraction 0.5` with a new output directory.
+Passages follow decoded source lines, split at the token limit; peer line wrapping
+does not need to match. Matching ignores case, formatting and ordinary punctuation,
+preserves signed numeric tokens, and does not use fuzzy matches or peer repairs.
+Repeated matches need unique matching context, up to eight tokens on either side.
+Offsets are zero-based, end-exclusive positions in normalized page tokens, not
+image coordinates or raw character offsets.
+
+Meeting the support threshold marks a passage **corroborated**, even when other
+families disagree. Only below-threshold support makes a passage **uncertain**.
+Conflicting readings, ambiguous alignment and incomplete source output remain in
+the separate `flags` list; they do not veto corroboration. A three-versus-three split
+can corroborate both readings, with both retaining conflict flags. Empty outputs are recorded separately in the JSON as
+uncertain, never verified blank. The threshold is an uncalibrated review heuristic;
+family separation does not prove independent errors, and jointly omitted text
+cannot be found from these outputs. Passage counts depend on source formatting and
+must not be used as model rankings. Existing agreement/accuracy scores are unchanged.
+Use a new output directory when changing code or policy; older reports are preserved.
+
 ## Reference-based critical-field benchmark
 
 Use the new [benchmark guide](standalone_ocr_eval/BENCHMARK.md) to define reviewed
@@ -27,13 +105,298 @@ conda run --no-capture-output -n myenv3.13 python scripts/evaluate_six_critical_
 
 The [pilot report](output/six_critical_field_evaluation/report.md) covers 27
 image-checked fields across seven pages, with a complete field audit and engine-family
-consensus sensitivity. It measures OCR plus strict extraction on these documents;
+consensus sensitivity. It measures OCR plus shared extraction on these documents;
 it is not a held-out or independently human-adjudicated benchmark. The script
 checks source and saved-artifact hashes and retains incorrect OCR values.
+
+## Shared invoice extractor (version 3)
+
+```bash
+conda run --no-capture-output -n myenv3.13 python scripts/reevaluate_shared_extractor.py
+```
+
+The shared pilot extractor supports invoice headers emitted as a label column
+followed by a value column: unique `DOC NO.`, `DATE`, and optional `GST NO.`
+labels pair by row order with an equal number of colon-prefixed value rows.
+Ambiguous or incomplete columns remain unextracted. Existing inline and wrapped
+single label/value rows retain their behavior. Values and decoded spans are
+preserved verbatim; no reference values or digit/date corrections are used.
+The rule remains confined to the first invoice's header.
+
+The 2026-10-12 [version 3 evaluation](output/extractor_v3_evaluation/report.md)
+reextracts every model in all six saved pilot comparisons from verified OCR
+artifacts, with unchanged references, scoring and document subsets. It preserves
+the previous outputs and makes no OCR/API requests. Claude is evaluated on its
+completed board/trade subset (21 fields); full-corpus methods use 27 fields.
+Both Unlimited-OCR variants and the historical six-method outputs are covered.
+
+Rotated Unlimited-OCR recovers the invoice number and date, improving
+**23/27 → 25/27** and **86.54 → 94.87/100**. Its remaining misses are the two
+board schedule fields. All other saved models retain their prior scores under
+the same rules. Whole-text agreement remains **90.34/100** for the rotated run,
+since this changes extraction rather than OCR. The report and scenario-specific
+field audits retain before/after predictions. This is a post-hoc convenience
+sample, not a held-out accuracy benchmark.
 
 ## Standalone Python library
 
 See [standalone_ocr_eval/README.md](standalone_ocr_eval/README.md) for installation, API, CLI, input schema, and optional ontology instructions.
+Version 0.5 includes portable `evaluate_saved` and `ocr-eval evaluate-saved` entry
+points for full-text agreement without ontology and two-family passage corroboration.
+It requires no OCR backend or repository data; the input bundle supplies saved
+text, engine families and the fixed voting panel.
+
+## Verified OpenAI VLM OCR (GPT-6 Astra)
+
+The historical `output/openai-6/` artifacts identify Tesseract with selective
+review. A genuine OpenAI VLM run is saved separately and labelled `gpt-6-astra`.
+
+Set `OPENAI_API_KEY` locally, then run:
+
+```bash
+conda run --no-capture-output -n myenv3.13 python -m pip install --no-user -r requirements-astra.txt
+conda run --no-capture-output -n myenv3.13 python scripts/run_astra_ocr.py --workers 3 --output output/openai-vlm-gpt-6-astra
+conda run --no-capture-output -n myenv3.13 python scripts/evaluate_openai_vlm.py
+```
+
+The runner submits rendered page images to the official OpenAI Responses API;
+this uploads the documents and incurs API charges. It pins the endpoint to
+`https://api.openai.com/v1`. Defaults: all three current PDFs (48 pages), 144 DPI,
+`detail=high`, low reasoning effort, structured JSON and 16,000 maximum output
+tokens per page. `--detail original` is available for a separate experiment.
+`--workers` controls concurrent documents (1–3); PDFium rendering calls are
+serialized for thread safety. `--input`, `--output`, `--dpi`, `--dry-run` and
+`--overwrite` are also supported.
+
+Each completed page retains the raw API response, returned model ID, response
+ID, request timing, image hash/dimensions, ordered blocks and Markdown. Source
+bytes, prompt, schema and inference settings determine the cache directory.
+Incomplete or unexpected-model responses are saved as `incomplete-NNNN.json`
+and cannot be reused as completed checkpoints. The manifest records completed
+documents and failures; rerunning resumes saved pages. Do not run concurrent
+commands against the same output directory.
+
+The evaluator verifies complete coverage and artifact hashes, adds the actual
+VLM alongside six saved workflows, excluding the historical `openai-6` output, and
+generates **whole-document token agreement without ontology**, with equal
+document weighting and engine-family sensitivity. It also reuses the frozen
+27-field pilot with the same references and versioned shared extraction rules for every model. The remaining
+`fable-5-1` baseline is labelled as a Tesseract-based artifact.
+
+Results: [comparison report](output/openai_vlm_experiment/report.md),
+[ranking](output/openai_vlm_experiment/ranking.csv),
+[field audit](output/openai_vlm_experiment/field_audit.csv).
+
+The 2026-10-11 API run completed all 48 pages, each returning `gpt-6-astra`
+with completed status. After excluding `openai-6`, without ontology it scored
+**91.54/100**, ranking third among seven outputs after the PaddleOCR rerun
+(CSA 98.42, board 86.54, trade 89.67). It passed
+**27/27** frozen pilot fields for a 100/100 pilot score. This selected-field
+result does not establish full-corpus accuracy. Run wall time was 345.16 seconds
+with three document workers; usage was 128,672 input and 33,564 output tokens.
+
+API references: [GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra),
+[image inputs](https://developers.openai.com/api/docs/guides/images-vision).
+
+## Claude OCR through a compatible gateway
+
+`scripts/run_claude_ocr.py` runs `claude-fable-5-1` at the user-selected
+`https://one.liangzhili.com/v1` endpoint. Model identity is gateway-reported;
+the upstream provider is not independently verified. This is separate from the
+historical Tesseract-based `fable-5-1` output.
+
+Set `OPENAI_API_KEY` locally. The existing OpenAI SDK dependency is reused:
+
+```bash
+conda run --no-capture-output -n myenv3.13 python scripts/run_claude_ocr.py --json-mode json_object --workers 3
+conda run --no-capture-output -n myenv3.13 python scripts/evaluate_claude_vlm.py
+```
+
+The runner uses the same three PDFs, 144-DPI images and transcription system
+prompt as the OpenAI experiment. The gateway did not enforce strict schema mode
+in a synthetic test, so this run uses JSON-object mode with the schema in the
+user message. Reasoning uses provider defaults. Saved native responses must
+match the requested model, finish normally and satisfy the schema before being
+accepted. No text repairs are applied. HTTP 400 page failures are retained and
+the remaining pages continue; reruns reuse both successes and recorded failures.
+
+The evaluator rejects incomplete runs by default. If pages are blocked, use
+`--complete-documents-only` to compare only fully completed documents, removing
+the same documents from every peer. This subset is explicitly labelled and must
+not be compared directly with earlier full-corpus scores. Both modes exclude
+`openai-6` and use token overlap without ontology and the same versioned shared
+field extractor for every method.
+Outputs are saved under `output/claude-vlm-fable-5-1/` and the
+[comparison report](output/claude_vlm_experiment/report.md).
+
+The 2026-10-11 gateway run returned valid OCR for 46/48 pages; CSA pages 2 and 3
+were blocked by the gateway's content filter. The shared **34-page board/trade
+subset** therefore excludes CSA from all seven methods. After removing the
+historical Tesseract Fable output and refreshing PaddleOCR, Claude scored **88.21/100** in token agreement
+(rank 5/7) and passed **21/21** selected fields. Recalculate exclusions from saved
+inputs with `scripts/evaluate_claude_vlm.py --rescore-existing`; this preserves
+the original extraction even if the shared extractor has subsequently changed.
+These subset scores are not directly comparable with the earlier three-document
+scores. Saved response image hashes match the OpenAI experiment for all 46
+successful pages.
+
+## PaddleOCR v4 (local CPU)
+
+```bash
+bash scripts/setup_paddleocr.sh
+conda run --no-capture-output -n myenv3.13 python scripts/evaluate_six_critical_fields.py
+conda run --no-capture-output -n myenv3.13 python scripts/run_paddleocr_v4.py --no-textline-orientation
+conda run --no-capture-output -n myenv3.13 python scripts/evaluate_paddleocr_v4.py
+```
+
+Runs the English **PP-OCRv4 models**, explicitly selected through PaddleOCR
+3.7.0 / PaddlePaddle 3.3.1 / PaddleX 3.7.2. The OCR package version and model
+generation are different. Uses `PP-OCRv4_mobile_det` and
+`en_PP-OCRv4_mobile_rec`, plus PP-LCNet document orientation for rotated scans.
+Text-line orientation is disabled by default after it incorrectly rotated upright
+board date/signing lines by 180 degrees. Use `--textline-orientation` to enable
+it for a comparison run. Document unwarping is disabled. Model weights download from
+official Paddle hosting; document inference stays local.
+
+Setup installs packages in `.cache/paddleocr-packages`, loaded only by this
+runner through the existing `myenv3.13` Python. It does not replace the packages
+used by other OCR runners or create another environment. Installation requires
+compatible binary wheels and fails rather than switching Python versions.
+
+Defaults process all three PDFs (48 pages) at 144 DPI on CPU with 8 threads,
+a 2048-pixel maximum detector side, and recognition confidence threshold 0.5.
+Outputs under `output/paddleocr-v4/` include page checkpoints with native JSON
+(text, confidence scores, polygons and orientation), plain `document.txt`,
+`source.json`, model hashes, resolved pipeline settings, environment versions,
+and a manifest selecting completed runs. Text remains in native recognition
+order with one detection per line; tables are not reconstructed. Polygon
+coordinates refer to the image after automatic document rotation.
+
+The runner supports `--dry-run`, `--input`, `--output`, `--limit`, `--overwrite`,
+`--dpi`, `--det-limit`, `--cpu-threads`, `--textline-orientation`,
+`--no-textline-orientation`, `--smoke-test`, and `--setup-only`.
+Settings and source changes create new run directories; interrupted runs resume
+from page checkpoints. Avoid concurrent writes to the same output root. A run's
+manifest contains only that invocation's selected files; rerun the default full
+corpus command before evaluating after a partial-file experiment.
+
+The evaluator requires all 48 pages, verifies source/settings/artifact hashes,
+and compares the new output with the six saved methods. It keeps the existing
+27-field pilot references and comparison policies unchanged. Shared extractor
+version 2 tolerates spacing, sentence-ending account punctuation, joined
+currency/amount tokens and schedule anchoring, preserving raw values and spans.
+All methods are re-extracted with these same rules. The evaluator separately
+recomputes whole-document consensus and engine-family sensitivity. Pilot scores
+measure OCR plus extraction on a convenience sample, not held-out OCR accuracy;
+consensus scores measure peer agreement. See
+[experiment report](output/paddleocr_v4_experiment/report.md),
+[field audit](output/paddleocr_v4_experiment/field_audit.csv), and
+[page timings](output/paddleocr_v4_experiment/page_timing.csv).
+
+The 2026-10-11 rerun with text-line orientation disabled completed all 48 pages
+with no failures in 456.76 seconds of page inference (9.52 seconds/page,
+excluding setup and rendering). PP-OCRv4 passed **26/27** pilot fields:
+board 12/13, CSA 6/6, trade 8/8. Its equal-document pilot score is
+**97.44/100**, tied for second with Mistral in the seven-output comparison.
+Whole-document ontology-region agreement is **67.55/100** (7th); whole-text
+token agreement is **86.87/100** (6th). These are different metrics, and peer
+agreement is not reference accuracy.
+
+The prior score was 70.73 (18/27). Applying extractor version 2 to that same
+OCR text raises it to 94.87 (25/27); the new inference raises it to 97.44
+(26/27). All six historical methods were re-extracted with the same rules and
+retain their previous critical-field scores. The remaining PaddleOCR failure
+is the schedule signing rule, read as `CATEGORY A &B` rather than
+`CATEGORY (A & B)`. The raw value is retained and this text field still fails
+the existing comparison. Typed month dates accept optional space after the
+comma; date validity and literal invoice-date comparison remain enforced.
+These are post-hoc exploratory scores, not held-out accuracy.
+
+The [change comparison](output/paddleocr_v4_experiment/change_comparison.json)
+separates extraction improvements from inference changes. Previous results
+are preserved under `output/extractor_v1_orientation_enabled_archive/`, and
+the original OCR checkpoints remain in their settings-specific directories.
+
+Model/API reference: [PaddleOCR general OCR pipeline](https://www.paddleocr.ai/main/en/version3.x/pipeline_usage/OCR.html).
+
+## Unlimited-OCR (local Apple Silicon, BF16)
+
+```bash
+# Setup is optional when the existing DeepSeek MLX-VLM 0.7.0 packages are present.
+bash scripts/setup_unlimited.sh
+conda run --no-capture-output -n myenv3.13 python scripts/run_unlimited_ocr.py
+conda run --no-capture-output -n myenv3.13 python scripts/evaluate_unlimited_ocr.py
+```
+
+Runs [Baidu Unlimited-OCR](https://huggingface.co/baidu/Unlimited-OCR) through
+the unquantized [MLX BF16 conversion](https://huggingface.co/mlx-community/Unlimited-OCR-bf16),
+pinned to revision `6d9f675e3fa73dd49cd03f630868b1941c72803f`. This is an
+Apple Silicon runtime experiment, not the official CUDA implementation.
+Requires Metal GPU access and approximately 6.22 GiB of downloaded weights.
+All Python runs use `myenv3.13`; no additional environment is created.
+
+Defaults: all three PDFs (48 pages), 144 DPI, single-page `document parsing.`
+prompt, gundam mode (1024 global view and 640 local crops), greedy decoding,
+32768 output tokens/page and Baidu's sliding no-repeat n-gram guard (35/128).
+It does not test the model's one-shot multi-page capability. Supports `--input`,
+`--output`, `--limit`, `--dpi`, `--max-tokens`, `--dry-run`, `--setup-only`,
+and `--overwrite`. Source/settings hashes select resumable directories;
+incomplete generations are retained and rejected for scoring.
+
+Outputs under `output/unlimited-ocr-bf16/` retain raw layout-marked model text,
+cleaned Markdown, image hashes/dimensions, token counts, completion status,
+timings, model file hashes and runtime versions. Inference stays local.
+The evaluator verifies all 48 page artifacts and re-rendered image hashes,
+then compares with saved Mistral, MinerU, Insavlo, DeepSeek, PaddleOCR v4
+and genuine GPT-6 Astra outputs. Historical Tesseract-labelled `openai-6`
+and `fable-5-1` are excluded. DeepSeek and Unlimited-OCR share a conservative
+family group for the separate family-sensitivity calculation.
+
+The [experiment report](output/unlimited_ocr_experiment/report.md),
+[ranking](output/unlimited_ocr_experiment/ranking.csv),
+[field audit](output/unlimited_ocr_experiment/field_audit.csv), and
+[page timings](output/unlimited_ocr_experiment/page_timing.csv) distinguish
+whole-document token agreement without ontology from the unchanged 27-field
+OCR-plus-extraction pilot. Peer agreement is not accuracy; the pilot is a
+convenience sample, not a held-out accuracy benchmark.
+
+The 2026-10-12 BF16 run completed all 48 pages with no runtime failures in
+303.01 seconds (296.92 seconds of page inference; 44,114 generated tokens).
+Whole-document token agreement without ontology was **87.05/100**, ranking
+**5/7** in this comparison. It passed **22/27** frozen pilot fields:
+board 11/13, CSA 6/6, trade 5/8, with an equal-document pilot score of
+**82.37/100**. Board page 4 was classified entirely as an image; the rotated
+trade invoice on page 9 produced erroneous text. Their five selected fields
+are missing. Generation stop status does not establish transcription quality.
+
+To reproduce the separate rotation-correction experiment, reuse the verified
+PP-LCNet document-angle predictions from the existing PaddleOCR checkpoints:
+
+```bash
+conda run --no-capture-output -n myenv3.13 python scripts/run_unlimited_ocr.py --orientation-manifest output/paddleocr-v4/manifest.json
+conda run --no-capture-output -n myenv3.13 python scripts/evaluate_unlimited_ocr.py --ocr-output output/unlimited-ocr-bf16-rotated --output output/unlimited_ocr_rotation_experiment --compare-ocr-output output/unlimited-ocr-bf16 --compare-experiment output/unlimited_ocr_experiment
+```
+
+Trade pages 9 and 10 are rotated losslessly 90 degrees clockwise; the other
+46 images are unchanged. This replays only verified classifier angles, not
+PaddleOCR transcription, with original source hashes and matching render DPI.
+It does not deskew pages. Board page 4 is already upright and is left unchanged.
+The variant saves separately under `output/unlimited-ocr-bf16-rotated/` and
+preserves the original run. The [rotation report](output/unlimited_ocr_rotation_experiment/report.md),
+[recovery audit](output/unlimited_ocr_rotation_experiment/recovery_audit.csv),
+and [page changes](output/unlimited_ocr_rotation_experiment/page_changes.csv)
+compare identical peers, inference settings, references and extraction rules.
+Variant inference timings exclude the cached orientation classifier run.
+
+The 2026-10-12 rotation rerun completed all 48 pages without runtime failures
+in 286.61 seconds. Whole-text agreement rose **87.05 → 90.34/100** (still 5/7).
+The unchanged field extractor improved **22/27 → 23/27**, with an equal-document
+score of **82.37 → 86.54/100**. All three invoice reference values are now
+present in raw OCR on trade page 9. The account is extracted correctly; number
+and date remain unextracted because their labels are emitted separately from
+their values. The two board schedule fields remain absent. All 46 unrotated
+pages reproduced identical raw text. This post-hoc ablation preserves the
+original pilot and does not grant extraction credit for literal presence alone.
 
 ## DeepSeek OCR 2 (local Apple Silicon)
 

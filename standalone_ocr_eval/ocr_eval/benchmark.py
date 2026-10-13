@@ -14,7 +14,7 @@ import json
 
 from .profiles import canonical_value, fingerprint, nonempty, require, validate_profiles
 
-BENCHMARK_VERSION = '1.0'
+BENCHMARK_VERSION = '1.1'
 COUNTS = ('reference_fields', 'predicted_fields', 'detected_fields', 'correct_values',
           'literal_correct_values', 'localized_fields', 'missing_fields', 'wrong_values',
           'extra_fields', 'ignored_unreadable_predictions', 'unreadable_fields',
@@ -271,12 +271,15 @@ def _score_document(ref, prediction, profile, iou_threshold):
                     _iou(item, annotation), -index)
 
         candidates = groups[key]
-        index = max(candidates, key=quality) if candidates else None
+        # A field is a single submitted answer, not a list of guesses from which
+        # the reference may select the best. Keep the first for the audit only.
+        index = candidates[0] if candidates else None
+        ambiguous = len(candidates) > 1
         item = predictions[index] if index is not None else None
         detected = item is not None and bool(item['value'].strip())
-        same = bool(detected and quality(index)[0])
-        literal = bool(detected and item['value'] == annotation['value'])
-        localized = bool(detected and _iou(item, annotation) >= iou_threshold)
+        same = bool(detected and not ambiguous and quality(index)[0])
+        literal = bool(detected and not ambiguous and item['value'] == annotation['value'])
+        localized = bool(detected and not ambiguous and _iou(item, annotation) >= iou_threshold)
         if detected:
             used.add(index)
         if same:
@@ -298,7 +301,8 @@ def _score_document(ref, prediction, profile, iou_threshold):
                         'predicted_location': {k: item.get(k) for k in ('page', 'bbox')} if item else None,
                         'prediction_index': index, 'correct': same, 'literal_correct': literal,
                         'localized': localized, 'character_errors': edits,
-                        'reason': 'correct' if same else 'wrong_value' if detected else 'missing'})
+                        'ambiguous': ambiguous, 'candidate_count': len(candidates),
+                        'reason': 'duplicate_predictions' if ambiguous else 'correct' if same else 'wrong_value' if detected else 'missing'})
     extras = []
     for index, item in enumerate(predictions):
         if index in used or index in ignored:
@@ -425,6 +429,7 @@ def evaluate_benchmark(profiles, references, predictions, *, split='test', weigh
                        else 'Accuracy against supplied image-verified annotations; verification is declared by the annotator.',
             'settings': {'split': split, 'weighting': weighting, 'iou_threshold': iou_threshold,
                          'primary_metric': 'weighted_critical_field_accuracy',
+                         'duplicate_policy': 'Multiple predictions for one record/field receive no correctness credit.',
                          'normalization': 'Profile comparison policy; raw values retained.',
                          'document_ids': list(documents), 'profile_sha256': fingerprint(profiles),
                          'reference_sha256': fingerprint(references), 'predictions_sha256': fingerprint(predictions)},

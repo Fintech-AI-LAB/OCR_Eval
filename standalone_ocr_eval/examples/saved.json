@@ -1,0 +1,11 @@
+{
+  "data": {
+    "synthetic_invoice": {
+      "engine_a": {"pages": ["Account 001\nAmount 900"], "input_format": "plain"},
+      "engine_b": {"pages": ["Account 001\nAmount 900"], "input_format": "plain"},
+      "engine_c": {"pages": ["Account 001\nAmount 100"], "input_format": "plain"}
+    }
+  },
+  "families": {"engine_a": ["family_a"], "engine_b": ["family_b"], "engine_c": ["family_c"]},
+  "panel": ["engine_a", "engine_b", "engine_c"]
+}

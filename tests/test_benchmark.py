@@ -114,16 +114,19 @@ class BenchmarkTests(unittest.TestCase):
     def test_duplicate_predictions_penalize_precision_and_document_success(self):
         self.fields.append(deepcopy(self.fields[0]))
         m = self.metrics()
-        self.assertEqual(m['value_precision'], 0.75)
+        self.assertEqual(m['value_precision'], 0.5)
         self.assertEqual(m['extra_fields'], 1)
-        self.assertEqual(m['weighted_critical_field_accuracy'], 1)
+        self.assertAlmostEqual(m['weighted_critical_field_accuracy'], 2/7)
         self.assertEqual(m['all_critical_fields_correct_document_rate'], 0)
 
-    def test_best_duplicate_is_matched_once_and_bad_duplicate_remains_extra(self):
+    def test_conflicting_guesses_cannot_use_reference_to_select_answer(self):
         wrong = {**self.fields[0], 'value': '900'}
         self.fields.insert(0, wrong)
-        self.assertEqual(self.metrics()['correct_values'], 3)
+        self.assertEqual(self.metrics()['correct_values'], 2)
         self.assertEqual(self.metrics()['extra_fields'], 1)
+        self.assertAlmostEqual(self.metrics()['weighted_critical_field_accuracy'], 2/7)
+        self.fields.reverse()
+        self.assertEqual(self.metrics()['correct_values'], 2)
 
     def test_absent_field_hallucination_counts_as_extra(self):
         self.references['documents']['doc']['records'][0]['fields']['Account'] = {'status': 'absent'}

@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'standalone_ocr_eval'))
 from ocr_eval.llm_fields import ChatClient, compile_catalog, discover, text_blocks, read_json
+from ocr_eval.llm_api import call_llm_api
+from urllib.error import HTTPError
 
 CATALOG = {'schema_version': 1, 'schemas': [{'id': 'account', 'name': 'Account',
     'definition': 'A financial account', 'fields': [{'id': 'number', 'name': 'AccountNumber'}]}]}
@@ -101,12 +103,64 @@ class LLMFieldsTests(unittest.TestCase):
         self.assertTrue(request.full_url.endswith('/v1/chat/completions'))
         self.assertEqual(json.loads(request.data)['response_format'], {'type': 'json_object'})
         self.assertNotIn('secret', json.dumps(client.calls))
+        self.assertEqual(client.calls[0]['response_id'], 'response')
     def test_truncated_response_fails_closed(self):
         client = ChatClient('test', api_key='secret')
         response = {'choices': [{'finish_reason': 'length', 'message': {'content': '{}'}}]}
         with patch.object(client.opener, 'open', return_value=io.BytesIO(json.dumps(response).encode())):
             with self.assertRaisesRegex(ValueError, 'incomplete'):
                 client.ask('test', {})
+    def test_custom_api_adapter_runs_both_extraction_stages_without_default_transport(self):
+        fake = FakeClient()
+        seen = []
+        def custom_api(**request):
+            seen.append(request)
+            stage = 'schema_selection' if request['payload']['task'].startswith('Select') else 'critical_field_identification'
+            return {'output': fake.ask(stage, request['payload']), 'response_id': 'custom-response',
+                    'model': 'custom-model', 'usage': {'tokens': 7}, 'request_sha256': 'custom-hash'}
+        with patch.dict('os.environ', {}, clear=True), patch('ocr_eval.llm_fields.build_opener') as default_opener:
+            client = ChatClient('custom-model', base_url='custom-provider', request_fn=custom_api)
+            result = discover(self.source('Account: 00123'), CATALOG, client)
+        default_opener.assert_not_called()
+        self.assertEqual(result['fields'][0]['raw_value'], '00123')
+        self.assertEqual(len(seen), 2)
+        self.assertIn('untrusted OCR', seen[0]['system_prompt'])
+        self.assertIsNone(seen[0]['api_key'])
+        self.assertEqual(result['api']['calls'][0]['response_id'], 'custom-response')
+        self.assertEqual(result['api']['calls'][1]['request_sha256'], 'custom-hash')
+    def test_custom_adapter_invalid_output_rejected_before_trace(self):
+        for returned in (None, [], {'output': []}, {'output': 'not parsed'}, {}):
+            with self.subTest(returned=returned):
+                client = ChatClient('test', api_key='unused', request_fn=lambda **kw: returned)
+                with self.assertRaisesRegex(ValueError, 'JSON object'):
+                    client.ask('test', {})
+                self.assertEqual(client.calls, [])
+    def test_default_api_function_retries_and_returns_normalized_result(self):
+        from unittest.mock import Mock
+        response = {'id': 'response', 'model': 'test', 'usage': {'total_tokens': 5},
+                    'choices': [{'finish_reason': 'stop', 'message': {'content': '{"ok": true}'}}]}
+        opener = Mock()
+        opener.open.side_effect = [HTTPError('https://example.test', 429, 'rate limited', {}, None),
+                                   io.BytesIO(json.dumps(response).encode())]
+        with patch('ocr_eval.llm_api.time.sleep'):
+            result = call_llm_api(model='test', base_url='https://example.test/v1', api_key='secret',
+                system_prompt='Return JSON', payload={'task': 'test'}, opener=opener)
+        self.assertEqual(opener.open.call_count, 2)
+        self.assertEqual(result['output'], {'ok': True})
+        self.assertEqual(result['response_id'], 'response')
+        self.assertEqual(len(result['request_sha256']), 64)
+        self.assertNotIn('secret', json.dumps(result))
+    def test_default_api_function_rejects_refusal_and_malformed_content(self):
+        from unittest.mock import Mock
+        for message in ({'refusal': 'refused', 'content': '{}'}, {'content': 'not json'},
+                        {'content': '[]'}, {'content': {'ok': True}}):
+            with self.subTest(message=message):
+                response = {'choices': [{'finish_reason': 'stop', 'message': message}]}
+                opener = Mock()
+                opener.open.return_value = io.BytesIO(json.dumps(response).encode())
+                with self.assertRaises(ValueError):
+                    call_llm_api(model='test', base_url='https://example.test/v1', api_key='secret',
+                        system_prompt='Return JSON', payload={}, opener=opener)
     def test_context_does_not_count_as_evidence(self):
         p = self.source(json.dumps({'label': 'Account: 00123', 'amount': '25'}), '.json')
         result = discover(p, CATALOG, FakeClient())

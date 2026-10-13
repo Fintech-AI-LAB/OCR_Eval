@@ -21,6 +21,7 @@ OUT = ROOT / 'output/six_critical_field_evaluation'
 SAVED = ROOT / 'output/ontology_region_comparison_v6_1/six_documents'
 FAMILIES = {'mistral': 'mistral', 'openai-6': 'tesseract', 'fable-5-1': 'tesseract',
             'mineru': 'mineru', 'insavlo': 'unknown-insavlo', 'deepseek': 'deepseek'}
+EXTRACTOR_VERSION = 3
 SOURCES = {
     'csa': '1000759706 SSGA - SCB - CSA - EXECUTED - ANON (CLEAN).pdf',
     'board': 'board_resolution.pdf',
@@ -130,17 +131,57 @@ def annotations():
     return profiles, refs
 
 
-def extract(doc, text):
+def invoice_column_fields(text, start, end, *, label_columns=None):
+    """Bind a contiguous label column to an equally sized value column.
+
+    Require explicit invoice labels and colon-prefixed single-token values.
+    Never infer a missing row or choose values by their contents/reference.
+    """
+    lines = [(m.group().strip(), start + m.start() + len(m.group()) - len(m.group().lstrip()))
+             for m in re.finditer(r'[^\r\n]+', text[start:end]) if m.group().strip()]
+    labels = {'DOCNO': 'InvoiceNumber', 'DATE': 'InvoiceDate', 'GSTNO': None}
+    i = 0
+    while i < len(lines):
+        label_rows, j = [], i
+        while j < len(lines) and re.fullmatch(r'(?:DOC\s+NO\.?|DATE|GST\s+NO\.?)\s*:?', lines[j][0], re.I):
+            label_rows.append(re.sub(r'[^A-Z]', '', lines[j][0].upper()))
+            j += 1
+        if not label_rows:
+            i += 1
+            continue
+        if len(label_rows) >= 2 and label_columns is not None:
+            label_columns.append((lines[i][1], lines[j - 1][1] + len(lines[j - 1][0])))
+        value_rows, k = [], j
+        while k < len(lines):
+            match = re.fullmatch(r':\s*(?P<value>\S+)', lines[k][0])
+            if not match:
+                break
+            a, b = match.span('value')
+            value_rows.append((lines[k][1] + a, lines[k][1] + b))
+            k += 1
+        if (len(label_rows) == len(value_rows) and len(set(label_rows)) == len(label_rows)
+                and (len(label_rows) == 1 or {'DOCNO', 'DATE'} <= set(label_rows))):
+            for label, (a, b) in zip(label_rows, value_rows):
+                if labels[label]:
+                    yield {'record': 'document', 'field': labels[label], 'value': text[a:b],
+                           'decoded_span': [a, b],
+                           'extraction_rule': 'invoice-header-column-order; unique DOC NO/DATE[/GST NO] labels; equal colon-value count'}
+        i = max(j, k)
+
+
+def extract(doc, text, *, collect_duplicates=False):
     """Same label/section rules for every method; never consumes gold values.
 
-    Strict labels deliberately expose label loss and reading-order failure.
-    Captures retain OCR value errors and offsets into the saved decoded text.
+    Label and section rules tolerate formatting variations without repairing
+    captured values. Every capture retains its offsets in the decoded OCR.
     """
     found = []
 
-    def get(field, pattern, start=0, end=None, group='value'):
-        match = re.search(pattern, text[start:end], re.I | re.S)
-        if match:
+    def get(field, pattern, start=0, end=None, group='value', exclude_label_spans=()):
+        matches = re.finditer(pattern, text[start:end], re.I | re.S)
+        for match in matches:
+            if any(a <= start + match.start() < b for a, b in exclude_label_spans):
+                continue
             a, b = match.span(group)
             a, b = start + a, start + b
             while a < b and text[a].isspace():
@@ -150,11 +191,13 @@ def extract(doc, text):
             if a < b:
                 found.append({'record': 'document', 'field': field, 'value': text[a:b],
                               'decoded_span': [a, b], 'extraction_rule': pattern})
+            if not collect_duplicates:
+                break
 
     if doc == 'board':
         letter_end = re.search(r'We attached the following', text, re.I)
         letter_end = letter_end.start() if letter_end else 0
-        get('LetterDate', r'(?P<value>[A-Za-z]+\s+\d{1,2},\s+\d{4})', end=letter_end)
+        get('LetterDate', r'(?P<value>[A-Za-z]+\s+\d{1,2},\s*\d{4})', end=letter_end)
         resolution = re.search(r'That the company mandate', text, re.I)
         resolution_end = re.search(r'be changed as follows', text[resolution.start():], re.I) if resolution else None
         sections = [('Letter', 0, letter_end)]
@@ -165,28 +208,28 @@ def extract(doc, text):
                                ('DomiciliaryAccount', r'USD\s+Domiciliary\s+Account'),
                                ('ExportAccount', r'USD\s+Export\s+Proceeds\s+Account'),
                                ('FXBidAccount', r'FX\s+Bid\s+Account')]:
-                get(prefix+key, label+r'\s+(?P<value>[^\s,]+)', start, end)
-        # The letter lists the removed and added signatory, in that order.
-        names = list(re.finditer(r'Mr\.\s+(?P<value>[^\n\t]+?)(?=\s*[-–]\s*Category|\s+Category|\n|\t)',
-                                 text[:letter_end], re.I))
-        # Ignore salutation attention names: the mandate paragraph starts here.
+                # Exclude a sentence-ending dot, preserving malformed tokens.
+                get(prefix+key, label+r'\s+(?P<value>[^\s,]+?)(?:\.(?=\s|$)|(?=[\s,]|$))', start, end)
+        # Bind names to their paragraphs so an absent removed name cannot shift
+        # the added name into its field. Ignore the attention salutation.
         mandate = re.search(r'With reference', text[:letter_end], re.I)
-        names = [m for m in names if mandate and m.start() > mandate.start()]
-        for key, match in zip(['LetterRemovedSignatory', 'LetterAddedSignatory'], names):
-            a, b = match.span('value')
-            while a < b and text[a].isspace():
-                a += 1
-            while b > a and text[b-1].isspace():
-                b -= 1
-            found.append({'record': 'document', 'field': key, 'value': text[a:b],
-                          'decoded_span': [a, b], 'extraction_rule': 'Ordered Mr. names in letter mandate section.'})
+        added = re.search(r'Please\s+be\s+informed|the\s+following\s+person',
+                          text[mandate.end():letter_end], re.I) if mandate else None
+        if mandate and added:
+            added_start = mandate.end() + added.start()
+            name = r'Mr\.\s*(?P<value>[^\n\t]+?)(?=\s*[-–]\s*Category|\s+Category|\n|\t|$)'
+            get('LetterRemovedSignatory', name, mandate.end(), added_start)
+            get('LetterAddedSignatory', name, added_start, letter_end)
+        # Prefer the schedule's own heading over the preceding nominees stamp.
+        schedules = list(re.finditer(r'\bSCHEDULE\b', text, re.I))
         nominees = list(re.finditer(r'NOMINE?ES', text, re.I))
-        if nominees:
-            start = nominees[-1].end()
-            get('ScheduleEmail', r'Email\s*[:\t]\s*(?P<value>[^\n\t]*@[^\n\t]*?)(?=\s+Email|\n|\t|$)', start)
-            get('ScheduleSigningRule', r'(?P<value>TWO\s+SIGNATORIES\s+ONE\s+FROM\s+EACH\s+CATEGORY\s*\([^)]*\)\s+MUST\s+SIGN\s+JOINTLY)', start)
+        section = schedules or nominees
+        if section:
+            start = section[-1].end()
+            get('ScheduleEmail', r'Email[ \t]*:?[ \t]*(?P<value>[^\s@]+@[^\s@]+)', start)
+            get('ScheduleSigningRule', r'(?P<value>TWO\s+SIGNATORIES\s+ONE\s+FROM\s+EACH\s+CATEGORY\s*(?:\([^)]*\)|[A-Z]\s*&\s*[A-Z])\s+MUST\s+SIGN\s+JOINTLY)', start)
     elif doc == 'csa':
-        get('AgreementDate', r'dated as of\s+(?P<value>\d{1,2}\s+[A-Za-z]+\s+\d{4})', end=2000)
+        get('AgreementDate', r'dated as of\s*(?P<value>\d{1,2}\s+[A-Za-z]+\s+\d{4})', end=2000)
         for lower, upper in [(5, 10), (10, 30), (30, 50)]:
             # Value can precede the wrapped upper-bound phrase in plain OCR.
             get(f'Valuation{lower}To{upper}Years', rf'More than\s+{lower}\s+years\s+but not more'
@@ -201,15 +244,24 @@ def extract(doc, text):
         get('CoverDealNumber', r'Deal Number\s*/\s*Step Type\s+(?P<value>\S+)\s*/', end=cover_end)
         get('CoverCustomerName', r'Customer Name\s+(?P<value>.*?)\s*Customer ID', end=cover_end)
         get('CoverCustomerID', r'Customer ID\s+(?P<value>\S+)', end=cover_end)
-        get('CoverCurrency', r'Currency and Amount\s+(?P<value>\S+)', end=cover_end)
-        get('CoverAmount', r'Currency and Amount\s+\S+\s+(?P<value>[^\n\t]+)', end=cover_end)
+        get('CoverCurrency', r'Currency and Amount\s+(?P<value>[A-Z]{3})(?=[\s\d])', end=cover_end)
+        get('CoverAmount', r'Currency and Amount\s+[A-Z]{3}\s*(?P<value>[\d,]+(?:\.\d+)?)(?![\w.,])', end=cover_end)
         # First invoice only. No fallback searches for a matching reference value
         # in subsequent invoices, which would conceal missing or reordered data.
         bill_to = re.search(r'Bill to address', text, re.I)
         if bill_to:
             start = max(0, bill_to.start()-700)
-            get('InvoiceNumber', r'DOC\s+NO\.?\s*:\s*(?P<value>\S+)', start, bill_to.start())
-            get('InvoiceDate', r'(?<!\w)DATE\s*:\s*(?P<value>\S+)', start, bill_to.start())
+            # Preserve wrapped single label/value rows, but do not bind the
+            # last label in a label column to the first value in its column.
+            label_columns = []
+            column_fields = list(invoice_column_fields(text, start, bill_to.start(), label_columns=label_columns))
+            get('InvoiceNumber', r'DOC\s+NO\.?\s*:\s*(?P<value>\S+)', start, bill_to.start(),
+                exclude_label_spans=label_columns)
+            get('InvoiceDate', r'(?<!\w)DATE\s*:\s*(?P<value>\S+)', start, bill_to.start(),
+                exclude_label_spans=label_columns)
+            for item in column_fields:
+                if collect_duplicates or not any(f['field'] == item['field'] for f in found):
+                    found.append(item)
             # Stop before another invoice header/address, even when the first
             # invoice omitted a field that a subsequent copy happens to retain.
             after = text[bill_to.end():]
@@ -217,6 +269,30 @@ def extract(doc, text):
             end = min(bill_to.end()+1800, bill_to.end()+next_invoice.start()) if next_invoice else bill_to.end()+1800
             get('InvoiceCustomerAccount', r'Your customer account\s*:\s*(?P<value>\S+)', bill_to.end(), end)
     return found
+
+
+PAGE_EXTRACTOR_VERSION = 4
+
+
+def extract_pages(doc, pages, input_format='markdown'):
+    """Extract only on the physical page assigned by the frozen pilot schema.
+
+    Page routing consumes field names and evidence pages, never reference values.
+    Missing pages must remain empty placeholders; never concatenate or shift them.
+    Offsets are local to the decoded page. Repeated captures remain duplicates.
+    """
+    fields, seen = [], set()
+    routes = {row[0]: row[3] for row in GOLD[doc]}
+    for page, raw in enumerate(pages, 1):
+        text = field_text(raw, input_format)
+        for item in extract(doc, text, collect_duplicates=True):
+            # Overlapping parsers may find the same physical occurrence. This
+            # is one answer, unlike repetitions at different source offsets.
+            key = (item['field'], page, *item['decoded_span'])
+            if routes[item['field']] == page and key not in seen:
+                fields.append({**item, 'page': page})
+                seen.add(key)
+    return fields
 
 
 def main():
@@ -249,11 +325,13 @@ def main():
         predictions['methods'][method] = {
             'family': family, 'documents': docs,
             'provenance': {'saved_label': method, 'source_records': [r for r in provenance['artifacts'] if r['engine_label'] == method],
-                           'extraction': 'Shared deterministic section/label rules; developed on these documents; no value repair.'},
+                           'extractor_version': EXTRACTOR_VERSION,
+                           'extraction': 'Shared formatting-tolerant section/label rules; raw spans; no value repair.'},
         }
     result = evaluate_benchmark(profiles, refs, predictions, split='validation')
     result['meaning'] = ('Exploratory in-sample OCR-plus-extraction pilot on 27 selected fields from seven source pages. '
                          'Codex image-checked references, not independently human-adjudicated or a held-out benchmark.')
+    result['extractor_version'] = EXTRACTOR_VERSION
     result['pilot_limitations'] = {
         'selection': 'Convenience sample informed by earlier spot checks; no claim of exhaustive critical-field identification.',
         'weights': 'Uniform per-field weights within each document; equal document weights. Business costs not elicited.',
@@ -264,7 +342,9 @@ def main():
     for name, value in [('profiles.json', profiles), ('references.json', refs), ('predictions.json', predictions),
                         ('results.json', result), ('families.json', FAMILIES),
                         ('run_manifest.json', {'input_path': str(input_path), 'input_sha256': sha(input_path),
-                         'script_sha256': sha(Path(__file__)), 'verified_artifact_count': len(verified_artifacts),
+                         'script_sha256': sha(Path(__file__)), 'extractor_version': EXTRACTOR_VERSION,
+                         'value_normalization_script_sha256': sha(ROOT / 'standalone_ocr_eval/ocr_eval/field_values.py'),
+                         'verified_artifact_count': len(verified_artifacts),
                          'verified_artifacts': verified_artifacts})]:
         write(name, value)
     comparisons = {}
@@ -292,7 +372,7 @@ def main():
         for doc, scored in r['documents'].items():
             text = (OUT / 'decoded' / method / (doc+'.txt')).read_text()
             for x in scored['field_results']:
-                note = RETAINED_BUT_UNEXTRACTED.get((method, doc, x['field']), '')
+                note = RETAINED_BUT_UNEXTRACTED.get((method, doc, x['field']), '') if x['reason'] == 'missing' else ''
                 if note:
                     assert x['reason'] == 'missing' and x['reference_value'] in text
                 audit.append({'method': method, 'document': doc, 'field': x['field'],
@@ -300,7 +380,6 @@ def main():
                               'reference': x['reference_value'], 'prediction': x['predicted_value'],
                               'result': x['reason'], 'review_note': note})
     assert len(audit) == 162 and all(r['total'] == 27 for r in rows)
-    assert sum(bool(x['review_note']) for x in audit) == 8
     with (OUT / 'field_audit.csv').open('w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=list(audit[0])); writer.writeheader(); writer.writerows(audit)
     make_report(result, rows, comparisons, audit, len(verified_artifacts))
@@ -317,7 +396,8 @@ def main():
 def make_report(result, rows, comparisons, audit, artifact_count):
     lines = ['# Six saved OCR outputs: critical-field pilot', '', result['meaning'], '',
         'This run evaluates saved text; it does not run new OCR inference. The main score measures the '
-        'saved OCR output plus a shared, strict field extractor. It is sensitive to labels and reading order, '
+        f'saved OCR output plus shared extractor version {EXTRACTOR_VERSION}. It tolerates spacing and punctuation '
+        'while retaining raw values and offsets, and is still sensitive to labels and reading order, '
         'as well as the field values themselves. It is not an OCR-only character accuracy score.', '',
         '| Saved output | Score / 100 | Correct / 27 | Board / 13 | CSA / 6 | Trade / 8 | Unextracted | Wrong value/binding |',
         '|---|---:|---:|---:|---:|---:|---:|---:|']
@@ -336,10 +416,10 @@ def make_report(result, rows, comparisons, audit, artifact_count):
               'valuation percentages, rounding amount/currency; trade cover deal/customer identifiers, customer name '
               'and amount/currency, plus first-invoice number/date/customer account.', '',
               '## Failure analysis', '',
-              'Eight of the 15 unextracted fields retain the correct value in the relevant OCR text. The strict '
+              f'{sum(bool(x["review_note"]) for x in audit)} of the {sum(r["missing"] for r in rows)} unextracted fields have documented retained values. The shared '
               'extractor cannot bind them because labels or reading order are damaged. These are recorded below '
               'without changing their scores. This is a material limitation of comparing OCR engines through a '
-              'strict parser; it must not be reported as eight missing or incorrect value transcriptions.', '',
+              'parser; these failures must not be reported as missing or incorrect value transcriptions.', '',
               '| Output | Field | Diagnosis |', '|---|---|---|']
     for x in audit:
         if x['review_note']:

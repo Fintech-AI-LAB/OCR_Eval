@@ -217,7 +217,8 @@ def normalize_value(value, spec):
         except InvalidOperation:
             return None, 'invalid_number'
     if kind == 'date':
-        formats = ['%Y-%m-%d', '%Y/%m/%d', '%d %B %Y', '%d %b %Y', '%B %d, %Y', '%b %d, %Y']
+        formats = ['%Y-%m-%d', '%Y/%m/%d', '%d %B %Y', '%d %b %Y',
+                   '%B %d, %Y', '%b %d, %Y', '%B %d,%Y', '%b %d,%Y']
         numeric = re.fullmatch(r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})', value)
         if numeric:
             a, b = int(numeric[1]), int(numeric[2])

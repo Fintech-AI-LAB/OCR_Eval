@@ -7,11 +7,10 @@ import hashlib
 import json
 import os
 import re
-import time
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.request import build_opener
+
+from .llm_api import call_llm_api, NoRedirect, validate_base_url
 
 PROMPT_VERSION = 'ontology-critical-fields-v1'
 DEFAULT_POLICY = (
@@ -141,59 +140,38 @@ def validate_catalog(data):
     return data
 
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None  # Do not forward bearer credentials to redirect destinations.
-
-
 class ChatClient:
+    """Extraction client with an injectable request/result adapter.
+
+    request_fn receives the keyword arguments documented by call_llm_api and
+    returns a dict with a parsed JSON-object output and optional trace metadata.
+    Custom adapters may own credentials rather than requiring OPENAI_API_KEY.
+    """
     def __init__(self, model, base_url='https://api.openai.com/v1', api_key=None,
-                 timeout=90, retries=2):
-        parsed = urlparse(base_url)
-        if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in {'localhost', '127.0.0.1', '::1'}):
-            raise ValueError('Use HTTPS, or HTTP on localhost.')
-        if parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValueError('API base URL cannot contain credentials, query or fragment.')
+                 timeout=90, retries=2, request_fn=None):
+        if request_fn is not None and not callable(request_fn):
+            raise ValueError('request_fn must be callable.')
         self.model, self.base_url = model, base_url.rstrip('/')
         self.key = api_key if api_key is not None else os.environ.get('OPENAI_API_KEY')
-        if not self.key or not model:
-            raise ValueError('Set OPENAI_API_KEY and provide --model (or OPENAI_MODEL).')
+        if not model:
+            raise ValueError('Provide --model (or OPENAI_MODEL).')
+        if request_fn is None:
+            validate_base_url(base_url)
+            if not self.key:
+                raise ValueError('Set OPENAI_API_KEY and provide --model (or OPENAI_MODEL).')
+        self.request_fn = request_fn if request_fn is not None else call_llm_api
         self.timeout, self.retries, self.calls = timeout, retries, []
-        self.opener = build_opener(NoRedirect())
+        self.opener = build_opener(NoRedirect()) if request_fn is None else None
 
     def ask(self, stage, payload):
-        body = {'model': self.model, 'response_format': {'type': 'json_object'},
-                'messages': [{'role': 'system', 'content': SYSTEM},
-                             {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]}
-        request = Request(self.base_url + '/chat/completions',
-                          data=json.dumps(body).encode(),
-                          headers={'Authorization': 'Bearer ' + self.key, 'Content-Type': 'application/json'})
-        for attempt in range(self.retries + 1):
-            try:
-                with self.opener.open(request, timeout=self.timeout) as response:
-                    result = json.load(response)
-                break
-            except HTTPError as error:
-                if error.code in {429, 500, 502, 503, 504} and attempt < self.retries:
-                    time.sleep(2 ** attempt)
-                    continue
-                raise ValueError(f'LLM API HTTP {error.code}; check endpoint, model and credentials.') from None
-            except (URLError, TimeoutError):
-                if attempt < self.retries:
-                    time.sleep(2 ** attempt)
-                    continue
-                raise ValueError('LLM API connection failed or timed out.') from None
-        if not isinstance(result, dict) or not isinstance(result.get('choices'), list) or not result['choices']:
-            raise ValueError('LLM API returned no completion choices.')
-        choice = result['choices'][0]
-        message = choice.get('message', {})
-        if choice.get('finish_reason') != 'stop' or message.get('refusal'):
-            raise ValueError('LLM refused or returned an incomplete response; no fields accepted.')
-        content = json.loads(message.get('content') or '')
-        if not isinstance(content, dict):
-            raise ValueError('LLM response must be a JSON object.')
-        self.calls.append({'stage': stage, 'request_sha256': digest(body),
-                           'response_id': result.get('id'), 'model': result.get('model'),
+        result = self.request_fn(model=self.model, base_url=self.base_url, api_key=self.key,
+                                 system_prompt=SYSTEM, payload=payload, timeout=self.timeout,
+                                 retries=self.retries, opener=self.opener)
+        if not isinstance(result, dict) or not isinstance(result.get('output'), dict):
+            raise ValueError('LLM adapter must return a dict with a JSON object in output.')
+        content = result['output']
+        self.calls.append({'stage': stage, 'request_sha256': result.get('request_sha256'),
+                           'response_id': result.get('response_id'), 'model': result.get('model'),
                            'usage': result.get('usage'), 'output': content})
         return content
 

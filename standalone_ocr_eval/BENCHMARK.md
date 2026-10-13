@@ -226,9 +226,11 @@ and benchmark scoring rejects a different profile, preventing unnoticed drift.
 
 ## Metrics and matching policy
 
-Match `(document, record, canonical field)` one-to-one. Among duplicate candidates,
-prefer a correct typed value, then a literal match, then greater box overlap;
-all remaining duplicates are extras. Reordering records has no effect. Moving a
+Match `(document, record, canonical field)` one-to-one. Benchmark **1.1** gives
+zero correctness credit when more than one prediction is submitted for a field,
+including identical duplicates. The first candidate is retained for the audit;
+remaining candidates are extras. References never select the best guess.
+This replaces version 1.0's best-duplicate matching policy. Reordering records has no effect. Moving a
 value to a different record cannot earn credit by matching elsewhere in the page.
 
 The primary score is:
